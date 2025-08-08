@@ -1,0 +1,18 @@
+[package]
+name = "alarm_player"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mimalloc = "0.1"
+rumqttc = "0.24"
+tokio = { version = "1.47", features = ["full"] }
+serde = "1.0"
+toml = "0.9"
+config = "0.15"
+dotenvy = "0.15"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry", "std", "fmt", "time"]}
+time = { version = "0.3", features = ["serde"] }
