@@ -1,3 +1,5 @@
+//! 实际报警生产者，生产方式为从MQTT消费报警信息，
+//! 生产的报警写入`real_time` 队列
 use std::{sync::Arc, time::Duration};
 
 use rumqttc::v5::{AsyncClient, Event, EventLoop, Incoming, MqttOptions, mqttbytes::QoS};
@@ -21,6 +23,10 @@ impl Producer {
         }
     }
 
+    /// 从MQTT订阅报警消息，写入实时队列
+    /// 使用select! 监听程序中断，利用rumqttc 自动重连机制，重连后必须重新订阅（实测
+    /// 发现当前平台 `clean_start=false`不起作用，因此配置中要把`clean_start`设置
+    /// 为 true）
     pub async fn run(&self) -> anyhow::Result<()> {
         info!("Begin to run....");
         let mut options = MqttOptions::new(

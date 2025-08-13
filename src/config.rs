@@ -30,12 +30,40 @@ pub struct Mqtt {
     pub topic_speeker: Option<String>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Alarm {
     // 报警状态检查间隔
-    pub asc_interval_secs: Option<u32>,
+    #[serde(default)]
+    pub asc_interval_secs: u64,
     // 报警播放间隔
-    pub play_interval_secs: Option<u32>,
+    #[serde(default)]
+    pub play_interval_secs: u64,
+}
+
+impl Default for Alarm {
+    fn default() -> Self {
+        Self {
+            asc_interval_secs: 5,
+            play_interval_secs: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Queue {
+    #[serde(default)]
+    pub real_time_size: usize,
+    #[serde(default)]
+    pub player_size: usize,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self {
+            real_time_size: 100,
+            player_size: 10,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -44,6 +72,7 @@ pub struct Config {
     pub tracing: Tracing,
     pub mqtt: Mqtt,
     pub alarm: Alarm,
+    pub queue: Queue,
 }
 
 impl Config {

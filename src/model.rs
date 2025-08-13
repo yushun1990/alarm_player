@@ -13,6 +13,9 @@ pub struct Alarm {
     pub timestamp: OffsetDateTime,
     pub alarm_type: String,
     pub is_alarm: bool,
+    #[serde(skip)]
+    #[serde(default)]
+    pub is_new: bool,
     #[serde(default)]
     pub day_age: u32,
 }
