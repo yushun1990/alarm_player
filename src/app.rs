@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use clap::{Parser, command};
 use mimalloc::MiMalloc;
+use tokio::sync::mpsc::channel;
 
 use crate::{
+    model::Alarm,
     player::Player,
     processor::{cycle::Cycle, real_time::RealTime},
     service::AlarmService,
@@ -31,14 +33,18 @@ where
         None => tracing_subscriber::fmt().with_env_filter("info").init(),
     };
 
-    let mut player = Player::new(config.queue.player_size, service.clone());
-    let cycle = Cycle::init(player.sender.clone(), player.cycle_rx, service.clone()).await;
+    let (real_time_tx, real_time_rx) = channel::<Alarm>(config.queue.real_time_size);
+    let (cycle_tx, cycle_rx) = channel::<Alarm>(config.queue.real_time_size);
+    let (player_tx, player_rx) = channel::<Alarm>(config.queue.real_time_size);
 
+    let player = Player::new(player_rx, cycle_tx.clone(), service.clone());
+    let cycle = Cycle::init(player_tx.clone(), cycle_rx, service.clone()).await;
     let real_time = RealTime::new(
-        config.queue.real_time_size,
+        player_tx.clone(),
+        real_time_rx,
         config.alarm.asc_interval_secs,
-        player.sender(),
         service.clone(),
     );
+
     Ok(())
 }

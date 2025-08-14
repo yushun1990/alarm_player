@@ -12,26 +12,20 @@ pub struct Player<S>
 where
     S: AlarmService + Send + Sync + 'static,
 {
-    pub sender: Sender<Alarm>,
-    pub receiver: Receiver<Alarm>,
-    pub service: Arc<S>,
-    pub cycle_tx: Sender<Alarm>,
-    pub cycle_rx: Receiver<Alarm>,
+    player_rx: Receiver<Alarm>,
+    cycle_tx: Sender<Alarm>,
+    service: Arc<S>,
 }
 
 impl<S> Player<S>
 where
     S: AlarmService + Send + Sync + 'static,
 {
-    pub fn new(size: usize, service: Arc<S>) -> Self {
-        let (sender, receiver) = mpsc::channel::<Alarm>(size);
-        let (cycle_tx, cycle_rx) = mpsc::channel::<Alarm>(10);
+    pub fn new(player_rx: Receiver<Alarm>, cycle_tx: Sender<Alarm>, service: Arc<S>) -> Self {
         Self {
-            sender,
-            receiver,
-            service,
+            player_rx,
             cycle_tx,
-            cycle_rx,
+            service,
         }
     }
 
@@ -39,13 +33,13 @@ where
         sleep(Duration::from_secs(5)).await;
     }
 
-    pub async fn run(&mut self) -> anyhow::Result<()> {
+    pub async fn run(&mut self) {
         loop {
-            let mut alarm = match self.receiver.recv().await {
+            let mut alarm = match self.player_rx.recv().await {
                 Some(alarm) => alarm,
                 None => {
                     info!("Play queue was closed, exit...");
-                    return Ok(());
+                    return;
                 }
             };
 
@@ -64,10 +58,6 @@ where
                 }
             }
         }
-    }
-
-    pub fn sender(&self) -> Sender<Alarm> {
-        self.sender.clone()
     }
 
     async fn play(&self, alarm: &Alarm) {

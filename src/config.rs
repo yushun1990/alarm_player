@@ -2,7 +2,7 @@ use config::{Environment, File};
 use serde::Deserialize;
 
 #[derive(Debug, Default, Clone, Deserialize)]
-pub struct Database {
+pub struct DbConfig {
     pub connection: Option<String>,
     pub max_conns: Option<u32>,
     pub min_conns: Option<u32>,
@@ -12,12 +12,12 @@ pub struct Database {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-pub struct Tracing {
+pub struct TracingConfig {
     pub level: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-pub struct Mqtt {
+pub struct MqttConfig {
     pub client_id: Option<String>,
     pub broker: Option<String>,
     pub port: Option<u16>,
@@ -31,48 +31,55 @@ pub struct Mqtt {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Alarm {
+pub struct AlarmConfig {
     // 报警状态检查间隔
     #[serde(default)]
     pub asc_interval_secs: u64,
+    // 循环队列间隔
+    #[serde(default)]
+    pub cycle_interval_secs: u64,
     // 报警播放间隔
     #[serde(default)]
     pub play_interval_secs: u64,
 }
 
-impl Default for Alarm {
+impl Default for AlarmConfig {
     fn default() -> Self {
         Self {
             asc_interval_secs: 5,
+            cycle_interval_secs: 5,
             play_interval_secs: 5,
         }
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Queue {
+pub struct QueueConfig {
     #[serde(default)]
     pub real_time_size: usize,
     #[serde(default)]
     pub player_size: usize,
+    #[serde(default)]
+    pub cycle_size: usize,
 }
 
-impl Default for Queue {
+impl Default for QueueConfig {
     fn default() -> Self {
         Self {
             real_time_size: 100,
             player_size: 10,
+            cycle_size: 10,
         }
     }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct Config {
-    pub database: Database,
-    pub tracing: Tracing,
-    pub mqtt: Mqtt,
-    pub alarm: Alarm,
-    pub queue: Queue,
+    pub database: DbConfig,
+    pub tracing: TracingConfig,
+    pub mqtt: MqttConfig,
+    pub alarm: AlarmConfig,
+    pub queue: QueueConfig,
 }
 
 impl Config {
@@ -94,7 +101,7 @@ impl Config {
     }
 }
 
-impl Mqtt {
+impl MqttConfig {
     pub fn client_id(&self) -> String {
         if let Some(client_id) = self.client_id.clone() {
             client_id

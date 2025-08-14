@@ -2,23 +2,33 @@
 //! 生产的报警写入`real_time` 队列
 use std::{sync::Arc, time::Duration};
 
-use rumqttc::v5::{AsyncClient, Event, EventLoop, Incoming, MqttOptions, mqttbytes::QoS};
-use tokio::sync::{Notify, mpsc};
+use rumqttc::v5::{
+    AsyncClient, Event, EventLoop, Incoming, MqttOptions,
+    mqttbytes::{
+        QoS,
+        v5::{Packet, Publish},
+    },
+};
+use time::OffsetDateTime;
+use tokio::sync::{
+    Notify,
+    mpsc::{self, Sender},
+};
 use tracing::{error, info};
 
-use crate::config::{Alarm, Mqtt};
+use crate::{config::MqttConfig, model::Alarm};
 
 pub struct Producer {
     config: Mqtt,
-    alarm_tx: mpsc::Sender<Alarm>,
+    real_time_tx: Sender<Alarm>,
     shutdown: Arc<Notify>,
 }
 
 impl Producer {
-    pub fn new(config: Mqtt, alarm_tx: mpsc::Sender<Alarm>, shutdown: Arc<Notify>) -> Self {
+    pub fn new(config: MqttConfig, real_time_tx: Sender<Alarm>, shutdown: Arc<Notify>) -> Self {
         Self {
             config,
-            alarm_tx,
+            real_time_tx,
             shutdown,
         }
     }
@@ -56,6 +66,38 @@ impl Producer {
         }
     }
 
+    async fn send_alarm(sender: Sender<Alarm>, client: AsyncClient, packet: Publish) {
+        info!("Received alarm: {:?}", &packet.payload);
+        let mut alarm = match serde_json::from_slice::<Alarm>(&packet.payload) {
+            Ok(alarm) => alarm,
+            Err(e) => {
+                error!(
+                    "Deserialized to alarm faield: {e}; source: {:?}",
+                    &packet.payload
+                );
+                Self::ack(&client, &packet).await;
+                return;
+            }
+        };
+
+        alarm.received_time = OffsetDateTime::now_utc();
+        alarm.is_new = true;
+
+        info!("Received alarm: {:?}", &alarm);
+
+        if let Err(e) = sender.send(alarm).await {
+            error!("Send to real time failed: {e}");
+        }
+
+        Self::ack(&client, &packet).await;
+    }
+
+    async fn ack(client: &AsyncClient, packet: &Publish) {
+        if let Err(e) = client.ack(packet).await {
+            error!("Ack alarm failed: {e}");
+        }
+    }
+
     async fn listen(&self, client: &AsyncClient, mut eventloop: EventLoop) -> anyhow::Result<()> {
         loop {
             match eventloop.poll().await {
@@ -63,11 +105,9 @@ impl Producer {
                     match event {
                         Event::Incoming(Incoming::Publish(packet)) => {
                             let client = client.clone();
+                            let sender = self.real_time_tx.clone();
                             tokio::spawn(async move {
-                                info!("Received alarm: {:?}", &packet.payload);
-                                if let Err(e) = client.ack(&packet).await {
-                                    error!("Ack alarm failed: {e}");
-                                }
+                                Self::send_alarm(sender, client, packet).await;
                             });
                         }
                         Event::Incoming(Incoming::ConnAck(_)) => {

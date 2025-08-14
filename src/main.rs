@@ -8,8 +8,6 @@ use tokio::{
 };
 use tracing::{error, info};
 
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

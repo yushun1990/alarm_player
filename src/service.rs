@@ -17,7 +17,7 @@ pub trait AlarmService {
     /// 实时队列中的报警是否具备播放条件
     async fn is_realtime_alarm_playable(&self, alarm: &Alarm) -> bool;
     /// 循环队列中的报警是否具备播放条件
-    async fn is_recur_alarm_playable(&self, alarm: &Alarm) -> bool;
+    async fn is_cycle_alarm_playable(&self, alarm: &Alarm) -> bool;
 }
 
 pub struct DefaultAlarmServiceImpl {}
@@ -137,7 +137,7 @@ impl AlarmService for DefaultAlarmServiceImpl {
         clippy::type_complexity,
         clippy::type_repetition_in_bounds
     )]
-    fn is_recur_alarm_playable<'life0, 'life1, 'async_trait>(
+    fn is_cycle_alarm_playable<'life0, 'life1, 'async_trait>(
         &'life0 self,
         alarm: &'life1 Alarm,
     ) -> ::core::pin::Pin<

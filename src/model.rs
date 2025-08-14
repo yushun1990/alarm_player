@@ -11,6 +11,7 @@ pub struct Alarm {
     pub content: String,
     #[serde(rename = "TimeStamp")]
     pub timestamp: OffsetDateTime,
+    pub received_time: OffsetDateTime,
     pub alarm_type: String,
     pub is_alarm: bool,
     #[serde(skip)]

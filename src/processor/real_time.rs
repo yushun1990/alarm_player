@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use time::OffsetDateTime;
-use tokio::sync::mpsc::{Receiver, Sender, channel, error::TryRecvError};
+use tokio::sync::mpsc::{Receiver, Sender, error::TryRecvError};
 use tracing::{error, info};
 
 use crate::{model::Alarm, service::AlarmService};
@@ -10,9 +10,8 @@ pub struct RealTime<S>
 where
     S: AlarmService + Send + Sync + 'static,
 {
-    sender: Sender<Alarm>,
-    receiver: Receiver<Alarm>,
-    play_sender: Sender<Alarm>,
+    player_tx: Sender<Alarm>,
+    real_time_rx: Receiver<Alarm>,
     test_alarm: Option<Alarm>,
     service: Arc<S>,
     check_interval: u64,
@@ -23,17 +22,14 @@ where
     S: AlarmService + Send + Sync + 'static,
 {
     pub fn new(
-        size: usize,
+        player_tx: Sender<Alarm>,
+        real_time_rx: Receiver<Alarm>,
         check_interval: u64,
-        play_sender: Sender<Alarm>,
         service: Arc<S>,
     ) -> Self {
-        let (sender, receiver) = channel::<Alarm>(size);
-
         Self {
-            sender,
-            receiver,
-            play_sender,
+            player_tx,
+            real_time_rx,
             test_alarm: None,
             service,
             check_interval,
@@ -42,7 +38,7 @@ where
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
-            let alarm = match self.receiver.try_recv() {
+            let alarm = match self.real_time_rx.try_recv() {
                 Ok(alarm) => Some(alarm),
                 Err(TryRecvError::Empty) => None,
                 Err(TryRecvError::Disconnected) => return Ok(()),
@@ -57,7 +53,7 @@ where
                 if self.service.is_ongoing_alarm_exist().await {
                     info!("There alarms in playing, wait for it finished...");
                     self.test_alarm = None;
-                    let sender = self.sender.clone();
+                    let sender = self.player_tx.clone();
                     let check_interval = self.check_interval;
                     let service = self.service.clone();
                     tokio::spawn(async move {
@@ -72,7 +68,7 @@ where
             }
 
             info!("No real alarm, and no test alarm, wait for new alarm...");
-            let alarm = match self.receiver.recv().await {
+            let alarm = match self.real_time_rx.recv().await {
                 Some(alarm) => alarm,
                 None => {
                     info!("Real time queue closed, exit...");
@@ -150,12 +146,8 @@ where
 
     async fn alarm_to_play(&self, alarm: Alarm) {
         info!("Send alarm: {:?} to play queue...", alarm);
-        if let Err(e) = self.play_sender.send(alarm).await {
+        if let Err(e) = self.player_tx.send(alarm).await {
             error!("Failed to send alarm to play queue: {}", e);
         }
-    }
-
-    pub async fn get_sender(&self) -> Sender<Alarm> {
-        self.sender.clone()
     }
 }
