@@ -6,12 +6,11 @@ use tracing::{error, info};
 
 use crate::{model::Alarm, service::AlarmService};
 
+#[derive(Clone)]
 pub struct RealTime<S>
 where
-    S: AlarmService + Send + Sync + 'static,
+    S: AlarmService + Clone + Send + Sync + 'static,
 {
-    player_tx: Sender<Alarm>,
-    real_time_rx: Receiver<Alarm>,
     test_alarm: Option<Alarm>,
     service: Arc<S>,
     check_interval: u64,
@@ -19,33 +18,28 @@ where
 
 impl<S> RealTime<S>
 where
-    S: AlarmService + Send + Sync + 'static,
+    S: AlarmService + 'static,
 {
-    pub fn new(
-        player_tx: Sender<Alarm>,
-        real_time_rx: Receiver<Alarm>,
-        check_interval: u64,
-        service: Arc<S>,
-    ) -> Self {
+    pub fn new(check_interval: u64, service: Arc<S>) -> Self {
         Self {
-            player_tx,
-            real_time_rx,
             test_alarm: None,
             service,
             check_interval,
         }
     }
 
-    pub async fn run(&mut self) -> anyhow::Result<()> {
+    pub async fn run(&mut self, alarm_tx: Sender<Alarm>, mut alarm_rx: Receiver<Alarm>) {
         loop {
-            let alarm = match self.real_time_rx.try_recv() {
+            let alarm = match alarm_rx.try_recv() {
                 Ok(alarm) => Some(alarm),
                 Err(TryRecvError::Empty) => None,
-                Err(TryRecvError::Disconnected) => return Ok(()),
+                Err(TryRecvError::Disconnected) => {
+                    return;
+                }
             };
 
             if let Some(alarm) = alarm {
-                self.process(alarm).await;
+                self.process(&alarm_tx, alarm).await;
                 continue;
             }
 
@@ -53,46 +47,33 @@ where
                 if self.service.is_ongoing_alarm_exist().await {
                     info!("There alarms in playing, wait for it finished...");
                     self.test_alarm = None;
-                    let sender = self.player_tx.clone();
-                    let check_interval = self.check_interval;
-                    let service = self.service.clone();
-                    tokio::spawn(async move {
-                        Self::test_alarm_retry(service, sender, check_interval, test_alarm).await;
-                    });
+                    self.test_alarm_retry(&alarm_tx, test_alarm).await;
 
                     continue;
                 }
 
-                self.alarm_to_play(test_alarm).await;
+                Self::alarm_to_play(&alarm_tx, test_alarm).await;
                 continue;
             }
 
             info!("No real alarm, and no test alarm, wait for new alarm...");
-            let alarm = match self.real_time_rx.recv().await {
+            let alarm = match alarm_rx.recv().await {
                 Some(alarm) => alarm,
                 None => {
                     info!("Real time queue closed, exit...");
-                    return Ok(());
+                    return;
                 }
             };
 
-            self.process(alarm).await;
+            self.process(&alarm_tx, alarm).await;
         }
     }
 
     /// 测试报警重新写入实时队列
-    async fn test_alarm_retry(
-        service: Arc<S>,
-        sender: Sender<Alarm>,
-        check_interval: u64,
-        alarm: Alarm,
-    ) {
-        // TODO: if now() + act >= next_fire_time: exit
-        // TODO: sleep act
-        // TODO: re-entry
+    async fn test_alarm_retry(&self, sender: &Sender<Alarm>, alarm: Alarm) {
         let next_check_time = OffsetDateTime::now_utc()
-            .saturating_add(time::Duration::seconds(check_interval as i64));
-        let next_fire_time = service.next_fire_time().await;
+            .saturating_add(time::Duration::seconds(self.check_interval as i64));
+        let next_fire_time = self.service.next_fire_time().await;
 
         if next_check_time >= next_fire_time {
             info!(
@@ -102,8 +83,8 @@ where
             return;
         }
 
-        info!("Sleep {} secs...", check_interval);
-        tokio::time::sleep(Duration::from_secs(check_interval)).await;
+        info!("Sleep {} secs...", self.check_interval);
+        tokio::time::sleep(Duration::from_secs(self.check_interval)).await;
 
         if let Err(e) = sender.send(alarm).await {
             error!("Failed re-entry alarm to real queue: {e}");
@@ -111,7 +92,7 @@ where
     }
 
     /// 处理报警
-    async fn process(&mut self, alarm: Alarm) {
+    async fn process(&mut self, alarm_tx: &Sender<Alarm>, alarm: Alarm) {
         if alarm.alarm_type == crate::contract::ALARM_TYPE_TEST {
             info!("Received test alarm: {:?}, check for nexted one...", alarm);
             self.test_alarm = Some(alarm);
@@ -141,12 +122,12 @@ where
             return;
         }
 
-        self.alarm_to_play(alarm).await;
+        Self::alarm_to_play(alarm_tx, alarm).await;
     }
 
-    async fn alarm_to_play(&self, alarm: Alarm) {
+    async fn alarm_to_play(alarm_tx: &Sender<Alarm>, alarm: Alarm) {
         info!("Send alarm: {:?} to play queue...", alarm);
-        if let Err(e) = self.player_tx.send(alarm).await {
+        if let Err(e) = alarm_tx.send(alarm).await {
             error!("Failed to send alarm to play queue: {}", e);
         }
     }

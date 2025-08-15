@@ -4,40 +4,28 @@ use std::{sync::Arc, time::Duration};
 
 use rumqttc::v5::{
     AsyncClient, Event, EventLoop, Incoming, MqttOptions,
-    mqttbytes::{
-        QoS,
-        v5::{Packet, Publish},
-    },
+    mqttbytes::{QoS, v5::Publish},
 };
 use time::OffsetDateTime;
-use tokio::sync::{
-    Notify,
-    mpsc::{self, Sender},
-};
+use tokio::sync::{Notify, mpsc::Sender};
 use tracing::{error, info};
 
 use crate::{config::MqttConfig, model::Alarm};
 
 pub struct Producer {
-    config: Mqtt,
-    real_time_tx: Sender<Alarm>,
-    shutdown: Arc<Notify>,
+    config: MqttConfig,
 }
 
 impl Producer {
-    pub fn new(config: MqttConfig, real_time_tx: Sender<Alarm>, shutdown: Arc<Notify>) -> Self {
-        Self {
-            config,
-            real_time_tx,
-            shutdown,
-        }
+    pub fn new(config: MqttConfig) -> Self {
+        Self { config }
     }
 
     /// 从MQTT订阅报警消息，写入实时队列
     /// 使用select! 监听程序中断，利用rumqttc 自动重连机制，重连后必须重新订阅（实测
     /// 发现当前平台 `clean_start=false`不起作用，因此配置中要把`clean_start`设置
     /// 为 true）
-    pub async fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(&self, alarm_tx: Sender<Alarm>, shutdown: Arc<Notify>) -> anyhow::Result<()> {
         info!("Begin to run....");
         let mut options = MqttOptions::new(
             self.config.client_id(),
@@ -57,16 +45,16 @@ impl Producer {
         }
 
         tokio::select! {
-            _ = self.shutdown.notified() => {
+            _ = shutdown.notified() => {
                 info!("Shutdown alarm consumer...");
                 client.disconnect().await?;
                 return Ok(())
             },
-            result = self.listen(&client, eventloop) => result
+            result = self.listen(&alarm_tx, &client, eventloop) => result
         }
     }
 
-    async fn send_alarm(sender: Sender<Alarm>, client: AsyncClient, packet: Publish) {
+    async fn send_alarm(&self, sender: &Sender<Alarm>, client: &AsyncClient, packet: Publish) {
         info!("Received alarm: {:?}", &packet.payload);
         let mut alarm = match serde_json::from_slice::<Alarm>(&packet.payload) {
             Ok(alarm) => alarm,
@@ -98,17 +86,18 @@ impl Producer {
         }
     }
 
-    async fn listen(&self, client: &AsyncClient, mut eventloop: EventLoop) -> anyhow::Result<()> {
+    async fn listen(
+        &self,
+        alarm_tx: &Sender<Alarm>,
+        client: &AsyncClient,
+        mut eventloop: EventLoop,
+    ) -> anyhow::Result<()> {
         loop {
             match eventloop.poll().await {
                 Ok(event) => {
                     match event {
                         Event::Incoming(Incoming::Publish(packet)) => {
-                            let client = client.clone();
-                            let sender = self.real_time_tx.clone();
-                            tokio::spawn(async move {
-                                Self::send_alarm(sender, client, packet).await;
-                            });
+                            self.send_alarm(&alarm_tx, client, packet).await;
                         }
                         Event::Incoming(Incoming::ConnAck(_)) => {
                             info!("Mqtt reconneced!");

@@ -1,0 +1,2 @@
+database = {connection="postgres://postgres:BHzpdmYyyAV1*GHm@192.168.77.34:5432/AwingIB2?currentSchema=public"}
+mqtt = { broker = "192.168.77.34", username="admin", password="BHzpdmYyyAV1*GHm"}

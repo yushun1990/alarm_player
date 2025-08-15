@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio::{
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender},
     time::sleep,
 };
 use tracing::{error, info};
@@ -12,30 +12,24 @@ pub struct Player<S>
 where
     S: AlarmService + Send + Sync + 'static,
 {
-    player_rx: Receiver<Alarm>,
-    cycle_tx: Sender<Alarm>,
     service: Arc<S>,
 }
 
 impl<S> Player<S>
 where
-    S: AlarmService + Send + Sync + 'static,
+    S: AlarmService + 'static,
 {
-    pub fn new(player_rx: Receiver<Alarm>, cycle_tx: Sender<Alarm>, service: Arc<S>) -> Self {
-        Self {
-            player_rx,
-            cycle_tx,
-            service,
-        }
+    pub fn new(service: Arc<S>) -> Self {
+        Self { service }
     }
 
     async fn wait_for_finish(&self) {
         sleep(Duration::from_secs(5)).await;
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(&self, alarm_tx: Sender<Alarm>, mut alarm_rx: Receiver<Alarm>) {
         loop {
-            let mut alarm = match self.player_rx.recv().await {
+            let mut alarm = match alarm_rx.recv().await {
                 Some(alarm) => alarm,
                 None => {
                     info!("Play queue was closed, exit...");
@@ -53,7 +47,7 @@ where
             if self.service.is_alarm_playable(&alarm).await && alarm.is_new {
                 alarm.is_new = false;
                 info!("Alarm 写入循环播放列表");
-                if let Err(e) = self.cycle_tx.send(alarm).await {
+                if let Err(e) = alarm_tx.send(alarm).await {
                     error!("Failt send alarm to cycle queue: {e}");
                 }
             }

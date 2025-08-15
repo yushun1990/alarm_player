@@ -2,12 +2,20 @@ use std::sync::Arc;
 
 use clap::{Parser, command};
 use mimalloc::MiMalloc;
-use tokio::sync::mpsc::channel;
+use tokio::{
+    signal::{
+        self,
+        unix::{SignalKind, signal},
+    },
+    sync::{Notify, mpsc::channel},
+};
+use tracing::{error, info};
 
 use crate::{
     model::Alarm,
     player::Player,
     processor::{cycle::Cycle, real_time::RealTime},
+    producer::act_alarm,
     service::AlarmService,
 };
 
@@ -21,12 +29,12 @@ pub struct Args {
     pub config: String,
 }
 
-async fn run<S>(service: Arc<S>) -> anyhow::Result<()>
+pub async fn run<S>(service: Arc<S>)
 where
-    S: AlarmService + Send + Sync + 'static,
+    S: AlarmService + 'static,
 {
     let args = Args::parse();
-    let config = crate::config::Config::new(args.config.as_str())?;
+    let config = crate::config::Config::new(args.config.as_str()).unwrap();
 
     match config.tracing.level {
         Some(level) => tracing_subscriber::fmt().with_env_filter(level).init(),
@@ -37,14 +45,45 @@ where
     let (cycle_tx, cycle_rx) = channel::<Alarm>(config.queue.real_time_size);
     let (player_tx, player_rx) = channel::<Alarm>(config.queue.real_time_size);
 
-    let player = Player::new(player_rx, cycle_tx.clone(), service.clone());
-    let cycle = Cycle::init(player_tx.clone(), cycle_rx, service.clone()).await;
-    let real_time = RealTime::new(
-        player_tx.clone(),
-        real_time_rx,
-        config.alarm.asc_interval_secs,
-        service.clone(),
-    );
+    let player_serivce = service.clone();
+    let player_handle = tokio::spawn(async move {
+        Player::new(player_serivce).run(cycle_tx, player_rx).await;
+    });
 
-    Ok(())
+    let shutdown = Arc::new(Notify::new());
+    let sd = shutdown.clone();
+    let cycle_service = service.clone();
+    let alarm_tx = player_tx.clone();
+    let cycle_handle = tokio::spawn(async move {
+        Cycle::init(config.alarm.cycle_interval_secs, cycle_service)
+            .await
+            .run(alarm_tx, cycle_rx, sd)
+            .await;
+    });
+    let real_time_handle = tokio::spawn(async move {
+        RealTime::new(config.alarm.asc_interval_secs, service)
+            .run(player_tx, real_time_rx)
+            .await;
+    });
+
+    let producer = act_alarm::Producer::new(config.mqtt);
+    #[cfg(unix)]
+    let mut term_signal = signal(SignalKind::terminate()).unwrap();
+
+    tokio::select! {
+        _ = signal::ctrl_c() => info!("Received Ctrl+C"),
+        _ = term_signal.recv() => info!("Received SIGTERM"),
+        result = producer.run(real_time_tx, shutdown.clone()) => {
+            if let Err(e) = result {
+                error!("Alarm produce running failed: {e}");
+                shutdown.notify_waiters();
+            }
+        }
+    }
+
+    shutdown.notify_waiters();
+
+    let _ = tokio::join!(real_time_handle, cycle_handle, player_handle);
+
+    info!("==================== Alarm player exited ====================");
 }

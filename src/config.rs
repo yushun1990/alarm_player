@@ -1,5 +1,6 @@
 use config::{Environment, File};
 use serde::Deserialize;
+use tracing::error;
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct DbConfig {
@@ -75,10 +76,15 @@ impl Default for QueueConfig {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub database: DbConfig,
+    #[serde(default)]
     pub tracing: TracingConfig,
+    #[serde(default)]
     pub mqtt: MqttConfig,
+    #[serde(default)]
     pub alarm: AlarmConfig,
+    #[serde(default)]
     pub queue: QueueConfig,
 }
 
@@ -86,14 +92,21 @@ impl Config {
     pub fn new(location: &str) -> anyhow::Result<Self> {
         dotenvy::dotenv().ok();
 
-        let config = config::Config::builder()
+        let config = match config::Config::builder()
             .add_source(File::with_name(location))
             .add_source(
                 Environment::with_prefix("AP")
                     .separator("_")
                     .prefix_separator("__"),
             )
-            .build()?;
+            .build()
+        {
+            Ok(config) => config,
+            Err(e) => {
+                error!("Config error: {e}; using the default config.");
+                return Ok(Config::default());
+            }
+        };
 
         let config = config.try_deserialize()?;
 
