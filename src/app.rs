@@ -13,6 +13,7 @@ use tracing::{error, info};
 
 use crate::{
     model::Alarm,
+    mqtt_client::MqttClient,
     player::Player,
     processor::{cycle::Cycle, real_time::RealTime},
     producer::act_alarm,
@@ -66,14 +67,25 @@ where
             .await;
     });
 
-    let producer = act_alarm::Producer::new(config.mqtt);
+    let alarm_producer = act_alarm::Producer::new("alarm", real_time_tx.clone());
+    let repub_alarm_producer = act_alarm::Producer::new("repub_alarms", real_time_tx);
+
+    let mut client = MqttClient::new(config.mqtt)
+        .produce(alarm_producer)
+        .produce(repub_alarm_producer);
+
     #[cfg(unix)]
     let mut term_signal = signal(SignalKind::terminate()).unwrap();
 
+    let topics = vec![
+        "$share/ap/+/+/alarm",
+        "$share/ap/+/+/repub_alarms",
+        "/ap/test_alarm/crontab",
+    ];
     tokio::select! {
         _ = signal::ctrl_c() => info!("Received Ctrl+C"),
         _ = term_signal.recv() => info!("Received SIGTERM"),
-        result = producer.run(real_time_tx, shutdown.clone()) => {
+        result = client.subscribe(&topics, shutdown.clone()) => {
             if let Err(e) = result {
                 error!("Alarm produce running failed: {e}");
                 shutdown.notify_waiters();

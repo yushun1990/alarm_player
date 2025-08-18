@@ -9,7 +9,7 @@ use crate::{model::Alarm, service::AlarmService};
 #[derive(Clone)]
 pub struct RealTime<S>
 where
-    S: AlarmService + Clone + Send + Sync + 'static,
+    S: AlarmService + 'static,
 {
     test_alarm: Option<Alarm>,
     service: Arc<S>,
@@ -73,14 +73,14 @@ where
     async fn test_alarm_retry(&self, sender: &Sender<Alarm>, alarm: Alarm) {
         let next_check_time = OffsetDateTime::now_utc()
             .saturating_add(time::Duration::seconds(self.check_interval as i64));
-        let next_fire_time = self.service.next_fire_time().await;
-
-        if next_check_time >= next_fire_time {
-            info!(
-                "Next-check-time({:?}) > Next-fire-time({:?}); canceled!",
-                next_check_time, next_fire_time
-            );
-            return;
+        if let Some(next_fire_time) = self.service.next_fire_time().await {
+            if next_check_time >= next_fire_time {
+                info!(
+                    "Next-check-time({:?}) > Next-fire-time({:?}); canceled!",
+                    next_check_time, next_fire_time
+                );
+                return;
+            }
         }
 
         info!("Sleep {} secs...", self.check_interval);
@@ -106,9 +106,12 @@ where
             return;
         }
 
-        let play_time = alarm
-            .timestamp
-            .saturating_add(self.service.get_play_delay().await);
+        let alarm_time = match alarm.received_time {
+            Some(received_time) => received_time,
+            None => alarm.timestamp,
+        };
+
+        let play_time = alarm_time.saturating_add(self.service.get_play_delay().await);
         let current_time = OffsetDateTime::now_utc();
         if play_time > OffsetDateTime::now_utc() {
             let delay =
@@ -116,7 +119,7 @@ where
             info!("Delay: {:?}", delay);
             tokio::time::sleep(delay).await;
         }
-        info!("Check alarm palyablility after daley...");
+        info!("Check alarm palyablility after delay...");
         if !self.service.is_alarm_playable(&alarm).await {
             info!("Alarm: {:?} not playable, Skiped!", alarm);
             return;

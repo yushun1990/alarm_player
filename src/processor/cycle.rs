@@ -69,13 +69,12 @@ where
         };
 
         if self.service.is_cycle_alarm_playable(&alarm).await {
-            info!("Send alarm to player: {:?}", alarm);
+            sleep(Duration::from_secs(self.check_interval)).await;
 
+            info!("Send alarm to player: {:?}", alarm);
             if let Err(e) = alarm_tx.send(alarm.clone()).await {
                 error!("Failed to send alarm to player: {e}");
             }
-
-            sleep(Duration::from_secs(self.check_interval)).await;
 
             // push alarm back to alarms
             self.alarms.lock().await.push_back(alarm);
