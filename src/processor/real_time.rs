@@ -93,7 +93,7 @@ where
 
     /// 处理报警
     async fn process(&mut self, alarm_tx: &Sender<Alarm>, alarm: Alarm) {
-        if alarm.alarm_type == crate::contract::ALARM_TYPE_TEST {
+        if alarm.is_alarm {
             info!("Received test alarm: {:?}, check for nexted one...", alarm);
             self.test_alarm = Some(alarm);
             return;

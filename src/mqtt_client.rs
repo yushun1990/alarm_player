@@ -13,7 +13,7 @@ use crate::config::MqttConfig;
 
 /// 消息处理器
 #[async_trait]
-pub trait Produce {
+pub trait Produce: Send + Sync {
     /// topic 匹配
     async fn mat(&self, topic: &str) -> bool;
     /// 消息处理
@@ -22,12 +22,11 @@ pub trait Produce {
 
 pub struct MqttClient {
     client: AsyncClient,
-    eventloop: EventLoop,
     produces: Vec<Box<dyn Produce>>,
 }
 
 impl MqttClient {
-    pub fn new(config: MqttConfig) -> Self {
+    pub fn new(config: MqttConfig) -> (Self, EventLoop) {
         let mut options = MqttOptions::new(config.client_id(), config.broker(), config.port());
         options
             .set_credentials(config.username(), config.password())
@@ -36,11 +35,17 @@ impl MqttClient {
             .set_manual_acks(true);
 
         let (client, eventloop) = AsyncClient::new(options, 10);
-        Self {
-            client,
+        (
+            Self {
+                client,
+                produces: Vec::new(),
+            },
             eventloop,
-            produces: Vec::new(),
-        }
+        )
+    }
+
+    pub fn client(&self) -> AsyncClient {
+        self.client.clone()
     }
 
     pub fn produce<T: Produce + 'static>(mut self, p: T) -> Self {
@@ -49,23 +54,25 @@ impl MqttClient {
     }
 
     pub async fn subscribe(
-        &mut self,
-        topics: &Vec<&str>,
+        &self,
+        mut eventloop: EventLoop,
+        topics: Vec<String>,
         shutdown: Arc<Notify>,
     ) -> anyhow::Result<()> {
         tokio::select! {
             _ = shutdown.notified() => {
                 info!("Cancel mqtt subscribtions...");
                 self.client.disconnect().await?;
+                info!("mqtt disconnected...");
                 Ok(())
             }
-            result = self.consume(topics) => result
+            result = self.consume(&mut eventloop, topics) => result
         }
     }
 
-    async fn consume(&mut self, topics: &Vec<&str>) -> anyhow::Result<()> {
+    async fn consume(&self, eventloop: &mut EventLoop, topics: Vec<String>) -> anyhow::Result<()> {
         loop {
-            match self.eventloop.poll().await {
+            match eventloop.poll().await {
                 Ok(event) => match event {
                     Event::Incoming(Incoming::Publish(packet)) => {
                         match std::str::from_utf8(&packet.topic) {
@@ -83,7 +90,7 @@ impl MqttClient {
                     }
                     Event::Incoming(Incoming::ConnAck(_)) => {
                         info!("MQTT connected, subscribe to broker...");
-                        for topic in topics {
+                        for topic in &topics {
                             self.client
                                 .subscribe(topic.to_string(), QoS::AtLeastOnce)
                                 .await?;
@@ -101,6 +108,7 @@ impl MqttClient {
     async fn distribute(&self, topic: &str, packet: &Publish) {
         for p in &self.produces {
             if p.mat(topic).await {
+                info!("topic: {topic}, payload: {:?}", packet.payload);
                 if let Err(e) = p.proc(packet.payload.clone()).await {
                     error!("Packet proc failed: {e}");
                 }

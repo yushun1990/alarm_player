@@ -42,6 +42,9 @@ pub struct AlarmConfig {
     // 报警播放间隔
     #[serde(default)]
     pub play_interval_secs: u64,
+    // 报警测试调度为空时检测周期
+    #[serde(default)]
+    pub empty_schedule_secs: u64,
 }
 
 impl Default for AlarmConfig {
@@ -50,6 +53,7 @@ impl Default for AlarmConfig {
             asc_interval_secs: 5,
             cycle_interval_secs: 5,
             play_interval_secs: 5,
+            empty_schedule_secs: 5,
         }
     }
 }

@@ -1,4 +1,9 @@
+use chrono::Utc;
+use cron::Schedule;
+use std::collections::HashMap;
+use std::str::FromStr;
 use time::OffsetDateTime;
+use tracing::error;
 
 use crate::model::Alarm;
 
@@ -21,16 +26,46 @@ pub trait AlarmService: Clone + Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct DefaultAlarmServiceImpl {}
+pub struct DefaultAlarmServiceImpl {
+    crontab: Option<String>,
+    play_delay_secs: u64,
+    is_alarm_paused: bool,
+    alarm_set: HashMap<String, Alarm>,
+}
+
+impl Default for DefaultAlarmServiceImpl {
+    fn default() -> Self {
+        Self {
+            crontab: None,
+            play_delay_secs: 20,
+            is_alarm_paused: false,
+            alarm_set: HashMap::new(),
+        }
+    }
+}
 
 #[allow(unused_variables)]
 impl AlarmService for DefaultAlarmServiceImpl {
     async fn get_alarms(&self) -> Vec<Alarm> {
-        vec![]
+        self.alarm_set.values().cloned().collect()
     }
 
     async fn next_fire_time(&self) -> Option<OffsetDateTime> {
-        Some(OffsetDateTime::now_utc())
+        match &self.crontab {
+            Some(crontab) => match Schedule::from_str(crontab.as_str()) {
+                Ok(schedule) => {
+                    if let Some(dt) = schedule.upcoming(Utc).next() {
+                        todo!()
+                    }
+                    return None;
+                }
+                Err(e) => {
+                    error!("Crontab parse failed: {e}");
+                    return None;
+                }
+            },
+            None => return None,
+        }
     }
 
     async fn update_crontab(&self, ct: String) -> () {}
@@ -53,11 +88,5 @@ impl AlarmService for DefaultAlarmServiceImpl {
 
     async fn is_cycle_alarm_playable(&self, alarm: &Alarm) -> bool {
         false
-    }
-}
-
-impl DefaultAlarmServiceImpl {
-    pub fn new() -> Self {
-        Self {}
     }
 }

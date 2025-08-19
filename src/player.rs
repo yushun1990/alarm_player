@@ -44,7 +44,8 @@ where
 
             self.play(&alarm).await;
 
-            if self.service.is_cycle_alarm_playable(&alarm).await && alarm.is_new {
+            if self.service.is_cycle_alarm_playable(&alarm).await && alarm.is_new && !alarm.is_test
+            {
                 alarm.is_new = false;
                 info!("Alarm 写入循环播放列表");
                 if let Err(e) = alarm_tx.send(alarm).await {

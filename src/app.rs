@@ -16,7 +16,7 @@ use crate::{
     mqtt_client::MqttClient,
     player::Player,
     processor::{cycle::Cycle, real_time::RealTime},
-    producer::act_alarm,
+    producer::{act_alarm, test_alarm},
     service::AlarmService,
 };
 
@@ -45,6 +45,7 @@ where
     let (real_time_tx, real_time_rx) = channel::<Alarm>(config.queue.real_time_size);
     let (cycle_tx, cycle_rx) = channel::<Alarm>(config.queue.real_time_size);
     let (player_tx, player_rx) = channel::<Alarm>(config.queue.real_time_size);
+    let (ct_tx, ct_rx) = channel::<String>(10);
 
     let player_serivce = service.clone();
     let player_handle = tokio::spawn(async move {
@@ -61,41 +62,64 @@ where
             .run(alarm_tx, cycle_rx, sd)
             .await;
     });
+    let real_time_service = service.clone();
     let real_time_handle = tokio::spawn(async move {
-        RealTime::new(config.alarm.asc_interval_secs, service)
+        RealTime::new(config.alarm.asc_interval_secs, real_time_service)
             .run(player_tx, real_time_rx)
             .await;
     });
 
     let alarm_producer = act_alarm::Producer::new("alarm", real_time_tx.clone());
-    let repub_alarm_producer = act_alarm::Producer::new("repub_alarms", real_time_tx);
-
-    let mut client = MqttClient::new(config.mqtt)
+    let repub_alarm_producer = act_alarm::Producer::new("repub_alarms", real_time_tx.clone());
+    let test_alarm_producer = test_alarm::Producer::new("crontab", ct_tx);
+    let (client, eventloop) = MqttClient::new(config.mqtt);
+    let client = client
         .produce(alarm_producer)
-        .produce(repub_alarm_producer);
+        .produce(repub_alarm_producer)
+        .produce(test_alarm_producer);
+
+    let mqtt_client = client.client();
+    let test_alarm_handle = tokio::spawn(async move {
+        test_alarm::TestAlarm::new(config.alarm.empty_schedule_secs, mqtt_client, service)
+            .run(real_time_tx, ct_rx)
+            .await;
+    });
+
+    let topics: Vec<String> = vec![
+        "$share/ap/+/+/alarm".to_string(),
+        "$share/ap/+/+/repub_alarms".to_string(),
+        "/ap/test_alarm/crontab".to_string(),
+    ];
+
+    let mqtt_shutdown = shutdown.clone();
+    let mqtt_subscribe_handle = tokio::spawn(async move {
+        if let Err(e) = client
+            .subscribe(eventloop, topics, mqtt_shutdown.clone())
+            .await
+        {
+            error!("Mqtt client subscribe failed: {e}");
+            mqtt_shutdown.notify_waiters();
+        }
+    });
 
     #[cfg(unix)]
     let mut term_signal = signal(SignalKind::terminate()).unwrap();
 
-    let topics = vec![
-        "$share/ap/+/+/alarm",
-        "$share/ap/+/+/repub_alarms",
-        "/ap/test_alarm/crontab",
-    ];
+    let st = shutdown.clone();
     tokio::select! {
         _ = signal::ctrl_c() => info!("Received Ctrl+C"),
         _ = term_signal.recv() => info!("Received SIGTERM"),
-        result = client.subscribe(&topics, shutdown.clone()) => {
-            if let Err(e) = result {
-                error!("Alarm produce running failed: {e}");
-                shutdown.notify_waiters();
-            }
-        }
+        _ = st.notified() => info!("Some error happend, exit...")
     }
 
     shutdown.notify_waiters();
-
-    let _ = tokio::join!(real_time_handle, cycle_handle, player_handle);
+    let _ = tokio::join!(
+        mqtt_subscribe_handle,
+        real_time_handle,
+        cycle_handle,
+        player_handle,
+        test_alarm_handle
+    );
 
     info!("==================== Alarm player exited ====================");
 }

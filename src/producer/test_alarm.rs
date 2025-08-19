@@ -2,38 +2,36 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use rumqttc::v5::AsyncClient;
 use time::OffsetDateTime;
 use tokio::{
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender},
     time::sleep,
 };
 use tracing::{error, info};
 
 use crate::{model::Alarm, mqtt_client::Produce, service::AlarmService};
 
-pub struct Producer<S>
-where
-    S: AlarmService + 'static,
-{
+pub struct Producer {
     topic: &'static str,
-    alarm_tx: Sender<Alarm>,
-    service: Arc<S>,
-    ct_tx: Sender<String>,
-    ct_rx: Receiver<String>,
+    tx: Sender<String>,
+}
+
+impl Producer {
+    pub fn new(topic: &'static str, tx: Sender<String>) -> Self {
+        Self { topic, tx }
+    }
 }
 
 #[async_trait]
-impl<S> Produce for Producer<S>
-where
-    S: AlarmService + 'static,
-{
+impl Produce for Producer {
     async fn mat(&self, topic: &str) -> bool {
         return topic.ends_with(self.topic);
     }
 
     async fn proc(&self, payload: Bytes) -> anyhow::Result<()> {
         let ct = std::str::from_utf8(&payload)?;
-        self.ct_tx
+        self.tx
             .send(ct.to_string())
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -42,25 +40,32 @@ where
     }
 }
 
-impl<S> Producer<S>
+#[allow(unused)]
+pub struct TestAlarm<S>
 where
     S: AlarmService + 'static,
 {
-    pub fn new(topic: &'static str, alarm_tx: Sender<Alarm>, service: Arc<S>) -> Self {
-        let (tx, rx) = mpsc::channel(10);
+    empty_schedule_secs: u64,
+    client: AsyncClient,
+    service: Arc<S>,
+}
+
+impl<S> TestAlarm<S>
+where
+    S: AlarmService + 'static,
+{
+    pub fn new(empty_schedule_secs: u64, client: AsyncClient, service: Arc<S>) -> Self {
         Self {
-            topic,
-            alarm_tx,
+            empty_schedule_secs,
+            client,
             service,
-            ct_tx: tx,
-            ct_rx: rx,
         }
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(&self, tx: Sender<Alarm>, mut rx: Receiver<String>) {
         loop {
             tokio::select! {
-                ct = self.ct_rx.recv() => {
+                ct = rx.recv() => {
                     match ct {
                         Some(ct) => {
                             info!("Received crontab: {ct}");
@@ -72,19 +77,26 @@ where
                         }
                     }
                 }
-                _ = Self::send_test_alarm(&self.service, &self.alarm_tx) => {
+                _ = self.send_test_alarm(&tx) => {
                 }
             }
         }
     }
 
-    async fn send_test_alarm(service: &S, tx: &Sender<Alarm>) {
-        if let Some(nt) = service.next_fire_time().await {
-            let secs = (nt - OffsetDateTime::now_utc()).whole_seconds();
-            sleep(Duration::from_secs(secs as u64)).await;
+    async fn send_test_alarm(&self, tx: &Sender<Alarm>) {
+        match self.service.next_fire_time().await {
+            Some(nt) => {
+                let secs = (nt - OffsetDateTime::now_utc()).whole_seconds();
+                sleep(Duration::from_secs(secs as u64)).await;
 
-            if let Err(e) = tx.send(Alarm::default()).await {
-                error!("Failed send test alarm to real time queue: {e}");
+                if let Err(e) = tx.send(Alarm::default()).await {
+                    error!("Failed send test alarm to real time queue: {e}");
+                }
+                // TODO: mqtt 发送测试结果确认消息
+            }
+            None => {
+                info!("No test alarm schedules ...");
+                sleep(Duration::from_secs(self.empty_schedule_secs)).await;
             }
         }
     }
