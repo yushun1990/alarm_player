@@ -1,9 +1,7 @@
 pub mod app;
 pub mod config;
-pub mod contract;
+pub mod handler;
 pub mod model;
 pub mod mqtt_client;
-pub mod player;
-pub mod processor;
-pub mod producer;
 pub mod service;
+pub mod task;

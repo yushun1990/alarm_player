@@ -7,17 +7,16 @@ use tokio::{
         self,
         unix::{SignalKind, signal},
     },
-    sync::{Notify, mpsc::channel},
+    sync::{Notify, RwLock, mpsc::channel},
 };
 use tracing::{error, info};
 
 use crate::{
+    handler::{ActAlarmHandler, DefaultHandler, TestAlarm, TestAlarmHandler},
     model::Alarm,
     mqtt_client::MqttClient,
-    player::Player,
-    processor::{cycle::Cycle, real_time::RealTime},
-    producer::{act_alarm, test_alarm},
     service::AlarmService,
+    task::{Cycle, Player, RealTime},
 };
 
 #[global_allocator]
@@ -30,7 +29,7 @@ pub struct Args {
     pub config: String,
 }
 
-pub async fn run<S>(service: Arc<S>)
+pub async fn run<S>(service: Arc<RwLock<S>>)
 where
     S: AlarmService + 'static,
 {
@@ -69,18 +68,19 @@ where
             .await;
     });
 
-    let alarm_producer = act_alarm::Producer::new("alarm", real_time_tx.clone());
-    let repub_alarm_producer = act_alarm::Producer::new("repub_alarms", real_time_tx.clone());
-    let test_alarm_producer = test_alarm::Producer::new("crontab", ct_tx);
-    let (client, eventloop) = MqttClient::new(config.mqtt);
-    let client = client
-        .produce(alarm_producer)
-        .produce(repub_alarm_producer)
-        .produce(test_alarm_producer);
+    let handler = DefaultHandler::default();
 
-    let mqtt_client = client.client();
+    type TAH = TestAlarmHandler<DefaultHandler>;
+    let handler = TAH::new("crontab", ct_tx).handler(handler);
+
+    type AAH = ActAlarmHandler<TAH>;
+    let handler = AAH::new("repub_alarms", real_time_tx.clone()).handler(handler);
+    let handler = ActAlarmHandler::<AAH>::new("alarm", real_time_tx.clone()).handler(handler);
+
+    let (client, eventloop) = MqttClient::new(config.mqtt);
+    let mqtt_client = client.clone();
     let test_alarm_handle = tokio::spawn(async move {
-        test_alarm::TestAlarm::new(config.alarm.empty_schedule_secs, mqtt_client, service)
+        TestAlarm::new(config.alarm.empty_schedule_secs, mqtt_client, service)
             .run(real_time_tx, ct_rx)
             .await;
     });
@@ -88,13 +88,13 @@ where
     let topics: Vec<String> = vec![
         "$share/ap/+/+/alarm".to_string(),
         "$share/ap/+/+/repub_alarms".to_string(),
-        "/ap/test_alarm/crontab".to_string(),
+        "ap/test_alarm/crontab".to_string(),
     ];
 
     let mqtt_shutdown = shutdown.clone();
     let mqtt_subscribe_handle = tokio::spawn(async move {
         if let Err(e) = client
-            .subscribe(eventloop, topics, mqtt_shutdown.clone())
+            .subscribe(eventloop, topics, &handler, mqtt_shutdown.clone())
             .await
         {
             error!("Mqtt client subscribe failed: {e}");

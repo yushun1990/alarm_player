@@ -1,1 +1,0 @@
-pub const ALARM_TYPE_TEST: &str = "DAILY_DETECT_TEST";

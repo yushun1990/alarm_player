@@ -26,6 +26,9 @@ mod rfc3339_time {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Alarm {
+    #[serde(skip)]
+    #[serde(default)]
+    pub house_code: String,
     pub tenant_id: Option<String>,
     pub farm_id: Option<String>,
     pub target_name: String,
@@ -40,9 +43,10 @@ pub struct Alarm {
     #[serde(default)]
     pub is_test: bool,
     pub is_alarm: bool,
+    // 报警确认状态, 已确认报警不播放
     #[serde(skip)]
     #[serde(default)]
-    pub is_new: bool,
+    pub is_confirmed: bool,
     #[serde(default)]
     pub day_age: u32,
 }
@@ -50,6 +54,7 @@ pub struct Alarm {
 impl Default for Alarm {
     fn default() -> Self {
         Self {
+            house_code: Default::default(),
             tenant_id: Default::default(),
             farm_id: Default::default(),
             target_name: Default::default(),
@@ -58,9 +63,9 @@ impl Default for Alarm {
             timestamp: OffsetDateTime::now_utc(),
             received_time: Some(OffsetDateTime::now_utc()),
             alarm_type: "test".to_string(),
+            is_confirmed: false,
             is_test: true,
             is_alarm: true,
-            is_new: Default::default(),
             day_age: Default::default(),
         }
     }
