@@ -6,3 +6,5 @@ pub use player::Player;
 
 mod real_time;
 pub use real_time::RealTime;
+
+mod recorder;

@@ -1,30 +1,63 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use tokio::{
-    sync::{
-        RwLock,
-        mpsc::{Receiver, Sender},
-    },
-    time::sleep,
+use reqwest::{
+    Client,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue},
+};
+use serde::Serialize;
+use tokio::sync::{
+    RwLock,
+    mpsc::{Receiver, Sender},
 };
 use tracing::{error, info};
 
 use crate::{
     model::Alarm,
-    service::{AlarmService, AlarmStatus},
+    service::{AlarmService, AlarmStatus, PlayContent},
 };
 
 pub struct Player<S: AlarmService> {
+    api_addr: String,
+    client: Client,
     service: Arc<RwLock<S>>,
 }
 
-impl<S: AlarmService> Player<S> {
-    pub fn new(service: Arc<RwLock<S>>) -> Self {
-        Self { service }
-    }
+#[derive(Clone, Serialize)]
+pub struct SpeechRequest {
+    pub device_ids: Vec<u32>,
+    pub url: Option<String>,
+    pub text: Option<String>,
+    #[serde(rename = "loop")]
+    pub play_loop: Option<PlayLoop>,
+}
 
-    async fn wait_for_finish(&self) {
-        sleep(Duration::from_secs(5)).await;
+#[derive(Clone, Serialize)]
+pub struct PlayLoop {
+    pub duration: u64,
+    pub times: u32,
+    pub gap: u64,
+}
+
+impl<S: AlarmService> Player<S> {
+    pub fn new(
+        api_addr: String,
+        api_login_token: String,
+        service: Arc<RwLock<S>>,
+    ) -> anyhow::Result<Self> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(format!("Bearer {api_login_token}").as_str())?,
+        );
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()?;
+
+        Ok(Self {
+            api_addr,
+            client,
+            service,
+        })
     }
 
     pub async fn run(&self, alarm_tx: Sender<Alarm>, mut alarm_rx: Receiver<Alarm>) {
@@ -74,6 +107,87 @@ impl<S: AlarmService> Player<S> {
 
     async fn play(&self, alarm: &Alarm) {
         info!("Play alarm: {:?}", alarm);
-        self.wait_for_finish().await;
+        if alarm.is_test {
+            self.play_test_alarm(alarm).await;
+        } else {
+            self.play_alarm(alarm).await;
+        }
+    }
+
+    async fn play_test_alarm(&self, alarm: &Alarm) {}
+
+    async fn play_alarm(&self, alarm: &Alarm) {
+        let request = self.build_speech_request(alarm, None).await;
+        tokio::join!(self.soundpost_play(request), self.soundbox_play());
+    }
+
+    async fn soundpost_play(&self, data: SpeechRequest) {
+        let url = format!("{}/v1/speech", self.api_addr);
+        match self.client.delete(url.clone()).json(&data).send().await {
+            Ok(res) => info!("Play cancel response: {:?}", res),
+            Err(e) => error!("Soundpost cancel play failed: {e}"),
+        }
+
+        // match self.client.post(url).json(&data).send().await {
+        //     Ok(res) => info!("Play response: {:?}", res),
+        //     Err(e) => error!("Soundpost play failed: {e}"),
+        // }
+    }
+
+    async fn soundbox_play(&self) {}
+
+    async fn build_speech_request(
+        &self,
+        alarm: &Alarm,
+        play_loop: Option<PlayLoop>,
+    ) -> SpeechRequest {
+        let (url, text) = {
+            let service = self.service.read().await;
+            match service.get_alarm_content(alarm) {
+                PlayContent::Url(url) => (Some(url), None),
+                PlayContent::TTS(tts) => (None, Some(tts)),
+            }
+        };
+
+        let device_ids = {
+            let service = self.service.read().await;
+            service.get_soundposts()
+        };
+
+        SpeechRequest {
+            device_ids,
+            url,
+            text,
+            play_loop,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tokio::sync::RwLock;
+
+    use crate::{model::Alarm, service::DefaultAlarmServiceImpl, task::Player};
+
+    #[tokio::test]
+    async fn test_play() {
+        tracing_subscriber::fmt().with_env_filter("info").init();
+        let mut service = DefaultAlarmServiceImpl::default();
+        service.alarm_media_url =
+            "http://192.168.77.14:8080/music/f627b51b4b10cfd945f24052ceed7e20.mp3".into();
+        service.soundposts = vec![1, 2];
+        service.alarm_play_mode = "music".into();
+        let player = Player::new(
+            "http://192.168.77.14:8080".into(),
+            "YWRtaW46YWRtaW5fYXBpX2tleQ==".into(),
+            Arc::new(RwLock::new(service)),
+        )
+        .unwrap();
+
+        let alarm = Alarm::default();
+
+        player.play_alarm(&alarm).await;
     }
 }
