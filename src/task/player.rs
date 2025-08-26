@@ -122,16 +122,57 @@ impl<S: AlarmService> Player<S> {
     }
 
     async fn soundpost_play(&self, data: SpeechRequest) {
-        let url = format!("{}/v1/speech", self.api_addr);
-        match self.client.delete(url.clone()).json(&data).send().await {
-            Ok(res) => info!("Play cancel response: {:?}", res),
-            Err(e) => error!("Soundpost cancel play failed: {e}"),
-        }
+        let result = match self
+            .client
+            .delete(format!(
+                "{}/v1/speech?device_ids={}",
+                self.api_addr,
+                data.device_ids
+                    .clone()
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",")
+            ))
+            .send()
+            .await
+        {
+            Ok(res) => match res.text().await {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("Cancel play failed: {e}");
+                    return;
+                }
+            },
+            Err(e) => {
+                error!("Soundpost cancel play failed: {e}");
+                return;
+            }
+        };
 
-        // match self.client.post(url).json(&data).send().await {
-        //     Ok(res) => info!("Play response: {:?}", res),
-        //     Err(e) => error!("Soundpost play failed: {e}"),
-        // }
+        info!("Cancel result: {result}");
+
+        let result = match self
+            .client
+            .post(format!("{}/v1/speech", self.api_addr))
+            .json(&data)
+            .send()
+            .await
+        {
+            Ok(res) => match res.text().await {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("Soundpost play failed: {e}");
+                    return;
+                }
+            },
+            Err(e) => {
+                error!("Soundpost play failed: {e}");
+                return;
+            }
+        };
+
+        info!("Soundpost play result: {result}");
     }
 
     async fn soundbox_play(&self) {}
@@ -176,7 +217,7 @@ mod tests {
         tracing_subscriber::fmt().with_env_filter("info").init();
         let mut service = DefaultAlarmServiceImpl::default();
         service.alarm_media_url =
-            "http://192.168.77.14:8080/music/f627b51b4b10cfd945f24052ceed7e20.mp3".into();
+            "http://192.168.77.14:8080/music/ed4b5d1af2ab7a1d921d16a857988620.mp3".into();
         service.soundposts = vec![1, 2];
         service.alarm_play_mode = "music".into();
         let player = Player::new(
