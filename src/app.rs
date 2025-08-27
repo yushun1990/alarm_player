@@ -15,7 +15,7 @@ use crate::{
     model::Alarm,
     mqtt_client::MqttClient,
     service::AlarmService,
-    task::{Cycle, Player, RealTime},
+    task::{Cycle, Play, RealTime},
 };
 
 #[global_allocator]
@@ -34,11 +34,11 @@ where
     let (player_tx, player_rx) = channel::<Alarm>(config.queue.real_time_size());
     let (ct_tx, ct_rx) = channel::<String>(10);
 
-    let player_serivce = service.clone();
-    let api_addr = config.soundpost.api_addr();
+    let play_serivce = service.clone();
+    let api_host = config.soundpost.api_host();
     let api_login_token = config.soundpost.api_login_token();
-    let player_handle = tokio::spawn(async move {
-        Player::new(api_addr, api_login_token, player_serivce)
+    let play_handle = tokio::spawn(async move {
+        Play::new(api_host, api_login_token, play_serivce)
             .unwrap()
             .run(cycle_tx, player_rx)
             .await;
@@ -113,7 +113,7 @@ where
         mqtt_subscribe_handle,
         real_time_handle,
         cycle_handle,
-        player_handle,
+        play_handle,
         test_alarm_handle
     );
 

@@ -290,25 +290,25 @@ impl QueueConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SoundpostConfig {
-    api_addr: Option<String>,
+    api_host: Option<String>,
     api_login_token: Option<String>,
 }
 
 impl Default for SoundpostConfig {
     fn default() -> Self {
         Self {
-            api_addr: Some("http://127.0.0.1:8080".into()),
+            api_host: Some("127.0.0.1:8080".into()),
             api_login_token: Some("YWRtaW46YWRtaW5fYXBpX2tleQ==".into()),
         }
     }
 }
 
 impl SoundpostConfig {
-    pub fn api_addr(&self) -> String {
-        if let Some(api_addr) = self.api_addr.clone() {
+    pub fn api_host(&self) -> String {
+        if let Some(api_addr) = self.api_host.clone() {
             api_addr
         } else {
-            Self::default().api_addr.unwrap()
+            Self::default().api_host.unwrap()
         }
     }
 
