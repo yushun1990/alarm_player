@@ -79,7 +79,7 @@ impl WsClient {
                         )))
                         .await
                     {
-                        error!("Failed send login to websocket, retry...");
+                        error!("Failed send login to websocket, err: {e}, retry...");
                         tokio::time::sleep(retry_interval).await;
                         continue;
                     }

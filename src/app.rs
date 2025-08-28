@@ -39,7 +39,6 @@ where
     let api_login_token = config.soundpost.api_login_token();
     let play_handle = tokio::spawn(async move {
         Play::new(api_host, api_login_token, play_serivce)
-            .unwrap()
             .run(cycle_tx, player_rx)
             .await;
     });
