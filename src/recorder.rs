@@ -1,29 +1,21 @@
-use std::{fs::File, io::BufWriter, sync::Arc, time::Duration};
+use std::{
+    fs::File,
+    io::BufWriter,
+    sync::{Arc, Mutex},
+};
 
 use cpal::{
-    Stream,
+    FromSample, Sample,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use hound::WavWriter;
-use tokio::sync::Mutex;
 use tracing::{error, info};
 
-type Writer = WavWriter<BufWriter<File>>;
+type WavWriterHandle = Arc<Mutex<Option<hound::WavWriter<BufWriter<File>>>>>;
 
-// 用于持有活动记录的状态
-pub struct RecordingState {
-    // writer 需要在多个异步任务间共享，并可能被修改
-    writer: Arc<Mutex<Writer>>,
-    // stream 对象本身控制着音频流的生命周期，当它被 drop 时，流会停止
-    // 它不需要在多个线程中被修改，所以不需要 Mutex
-    // 但我们需要一种方式在 stop 时拿走它的所有权，所以用 Option
-    stream: Option<Stream>,
-}
-
+// Recorder 现在作为一个状态管理器
 pub struct Recorder {
     pub storage_path: String,
-    pub link_path: String,
-    state: Arc<Mutex<Option<RecordingState>>>,
+    pub link_path: String, // 这个字段在您的代码中未使用，但我们保留它
 }
 
 impl Recorder {
@@ -31,99 +23,149 @@ impl Recorder {
         Self {
             storage_path,
             link_path,
-            state: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub async fn start(&self, filename: String) -> anyhow::Result<()> {
-        let host = cpal::default_host();
-        let device = match host.default_input_device() {
+    pub fn start(&self, filename: String) -> anyhow::Result<(cpal::Stream, WavWriterHandle)> {
+        let device = match cpal::default_host().default_input_device() {
             Some(device) => device,
-            None => {
-                return anyhow::bail!("No default input device found.");
-            }
+            None => return anyhow::bail!("No default input device found."),
         };
 
-        info!("Got device: {}", device.name()?);
         let config = device
             .default_input_config()
-            .inspect_err(|e| error!("No input config found: {e}"))?;
+            .inspect_err(|e| error!("No default input config found."))?;
 
-        // settting for wav param.
-        let spec = hound::WavSpec {
-            channels: config.channels(),
-            sample_rate: config.sample_rate().0,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
+        let path = format!("{}/{}", self.storage_path, filename);
+        let spec = Self::wav_format_from_config(&config);
+        let writer = hound::WavWriter::create(path, spec)?;
+        let writer = Arc::new(Mutex::new(Some(writer)));
+
+        let writer_clone = writer.clone();
+        let err_fn = move |e| {
+            error!("Stream build failed: {e}");
         };
-        // create wav file
-        let writer = File::create(format!("{}/{}", self.storage_path, filename))
-            .inspect_err(|e| error!("Failed to create wav file: {e}"))?;
-        let writer = BufWriter::new(writer);
-        let writer = match WavWriter::new(writer, spec) {
-            Ok(writer) => writer,
-            Err(e) => {
-                anyhow::bail!("Writer create failed: {e}");
+
+        info!("config.sample_format: {:?}", config.sample_format());
+
+        let stream = match config.sample_format() {
+            cpal::SampleFormat::I8 => device.build_input_stream(
+                &config.into(),
+                move |data, _: &_| Self::write_input_data::<i8, i8>(data, &writer_clone),
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::I16 => device.build_input_stream(
+                &config.into(),
+                move |data, _: &_| Self::write_input_data::<i16, i16>(data, &writer_clone),
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::I32 => device.build_input_stream(
+                &config.into(),
+                move |data, _: &_| Self::write_input_data::<i32, i32>(data, &writer_clone),
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::F32 => device.build_input_stream(
+                &config.into(),
+                move |data, _: &_| Self::write_input_data::<f32, f32>(data, &writer_clone),
+                err_fn,
+                None,
+            )?,
+            sample_format => {
+                return anyhow::bail!("Unsupported sample format: {sample_format}");
             }
         };
 
-        let writer = Arc::new(Mutex::new(writer));
-        let writer_clone = Arc::clone(&writer);
+        stream
+            .play()
+            .inspect_err(|e| error!("Record failed: {e}"))?;
 
-        // Create input stream
-        let stream = tokio::task::spawn_blocking(move || {
-            device.build_input_stream(
-                &config.into(),
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    let mut writer = futures::executor::block_on(writer_clone.lock());
-                    for &sample in data {
-                        match writer.write_sample(sample) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("Input write failed: {e}");
-                                return;
-                            }
-                        }
-                    }
-                },
-                |err| error!("Input stream write failed: {err}"),
-                None,
-            )
-        })
-        .await?
-        .inspect_err(|e| error!("Stream build faild: {e}"))?;
-
-        stream.play()?;
-
-        Ok(())
+        Ok((stream, writer))
     }
 
-    pub async fn stop(&self, writer: Arc<Mutex<Writer>>) {
-        let writer = writer.lock().await;
-        match writer.finalize() {
-            Ok(_) => {}
-            Err(e) => {
-                error!("Close writer failed: {e}");
-                return;
+    fn wav_format_from_config(config: &cpal::SupportedStreamConfig) -> hound::WavSpec {
+        hound::WavSpec {
+            channels: config.channels() as _,
+            sample_rate: config.sample_rate().0 as _,
+            bits_per_sample: (config.sample_format().sample_size() * 8) as _,
+            sample_format: Self::sample_format(config.sample_format()),
+        }
+    }
+
+    fn sample_format(format: cpal::SampleFormat) -> hound::SampleFormat {
+        if format.is_float() {
+            hound::SampleFormat::Float
+        } else {
+            hound::SampleFormat::Int
+        }
+    }
+
+    fn write_input_data<T, U>(input: &[T], writer: &WavWriterHandle)
+    where
+        T: Sample,
+        U: Sample + hound::Sample + FromSample<T>,
+    {
+        if let Ok(mut guard) = writer.try_lock() {
+            if let Some(writer) = guard.as_mut() {
+                for &sample in input.iter() {
+                    let sample: U = U::from_sample(sample);
+                    writer.write_sample(sample).ok();
+                }
             }
         }
+    }
+
+    pub fn stop(&self, stream: cpal::Stream, writer: WavWriterHandle) -> anyhow::Result<()> {
+        drop(stream);
+        let mut writer = writer
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock writer failed: {e}"))?;
+        let writer = writer
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Writer is None!"))?;
+        writer
+            .finalize()
+            .map_err(|e| anyhow::anyhow!("Writer finalize failed: {e}"))?;
+
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod recorder_tests {
-    use std::{ops::DerefMut, time::Duration};
+    use tracing::info;
 
     use crate::recorder::Recorder;
+    use std::{thread::sleep, time::Duration};
 
-    #[tokio::test]
-    async fn record_test() {
+    // 辅助函数：初始化日志，方便调试
+    fn setup_tracing() {
+        let subscriber = tracing_subscriber::FmtSubscriber::builder()
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    }
+
+    #[test]
+    fn record_test() {
+        setup_tracing(); // 初始化日志记录器
+
+        // 确保 /tmp 目录存在
+        std::fs::create_dir_all("/tmp").unwrap();
+
         let recorder = Recorder::new("/tmp".to_string(), "/tmp".to_string());
 
-        let writer = recorder.start("test.wav".to_string()).await.unwrap();
+        // 开始录制
+        let (stream, writer) = recorder.start("test.wav".to_string()).unwrap();
 
-        tokio::time::sleep(Duration::from_secs(5));
+        info!("Recording for 5 seconds...");
+        sleep(Duration::from_secs(30));
 
-        recorder.stop(writer).await;
+        // 停止录制
+        info!("Stopping recording...");
+        recorder.stop(stream, writer).unwrap();
+        info!("Recording stopped and file saved.");
     }
 }
