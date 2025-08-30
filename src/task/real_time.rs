@@ -12,15 +12,15 @@ use tracing::{error, info};
 
 use crate::{model::Alarm, service::AlarmService};
 
-pub struct RealTime<S: AlarmService> {
+pub struct RealTime {
     test_alarm: Option<Alarm>,
-    service: Arc<RwLock<S>>,
+    service: Arc<RwLock<AlarmService>>,
     check_interval: u64,
     sleep_task_handle: Option<JoinHandle<()>>,
 }
 
-impl<S: AlarmService> RealTime<S> {
-    pub fn new(check_interval: u64, service: Arc<RwLock<S>>) -> Self {
+impl RealTime {
+    pub fn new(check_interval: u64, service: Arc<RwLock<AlarmService>>) -> Self {
         Self {
             test_alarm: None,
             service,

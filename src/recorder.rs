@@ -14,8 +14,8 @@ type WavWriterHandle = Arc<Mutex<Option<hound::WavWriter<BufWriter<File>>>>>;
 
 // Recorder 现在作为一个状态管理器
 pub struct Recorder {
-    pub storage_path: String,
-    pub link_path: String, // 这个字段在您的代码中未使用，但我们保留它
+    storage_path: String,
+    link_path: String, // 这个字段在您的代码中未使用，但我们保留它
 }
 
 impl Recorder {

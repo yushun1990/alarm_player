@@ -68,14 +68,18 @@ impl<H: Handler> Handler for TestAlarmHandler<H> {
 }
 
 #[allow(unused)]
-pub struct TestAlarm<S: AlarmService + 'static> {
+pub struct TestAlarm {
     empty_schedule_secs: u64,
     client: MqttClient,
-    service: Arc<RwLock<S>>,
+    service: Arc<RwLock<AlarmService>>,
 }
 
-impl<S: AlarmService + 'static> TestAlarm<S> {
-    pub fn new(empty_schedule_secs: u64, client: MqttClient, service: Arc<RwLock<S>>) -> Self {
+impl TestAlarm {
+    pub fn new(
+        empty_schedule_secs: u64,
+        client: MqttClient,
+        service: Arc<RwLock<AlarmService>>,
+    ) -> Self {
         Self {
             empty_schedule_secs,
             client,

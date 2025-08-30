@@ -7,20 +7,32 @@ use tokio::sync::{
 use tracing::{error, info};
 
 use crate::{
+    Recorder,
     model::Alarm,
-    player::Soundpost,
+    player::{Soundbox, Soundpost},
     service::{AlarmService, AlarmStatus},
 };
 
-pub struct Play<S: AlarmService> {
+pub struct Play {
     soundpost: Soundpost,
-    service: Arc<RwLock<S>>,
+    soundbox: Soundbox,
+    recorder: Recorder,
+    service: Arc<RwLock<AlarmService>>,
 }
 
-impl<S: AlarmService> Play<S> {
-    pub fn new(api_host: String, api_login_token: String, service: Arc<RwLock<S>>) -> Self {
+impl Play {
+    pub fn new(
+        api_host: String,
+        api_login_token: String,
+        media_name: String,
+        storage_path: String,
+        link_path: String,
+        service: Arc<RwLock<AlarmService>>,
+    ) -> Self {
         Self {
             soundpost: Soundpost::new(api_host, api_login_token),
+            soundbox: Soundbox::new(media_name),
+            recorder: Recorder::new(storage_path, link_path),
             service,
         }
     }

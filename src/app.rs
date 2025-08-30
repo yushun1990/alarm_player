@@ -21,10 +21,7 @@ use crate::{
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-pub async fn run<S>(service: Arc<RwLock<S>>, config: crate::config::Config)
-where
-    S: AlarmService + 'static,
-{
+pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Config) {
     tracing_subscriber::fmt()
         .with_env_filter(config.tracing.level())
         .init();

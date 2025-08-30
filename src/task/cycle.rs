@@ -14,14 +14,14 @@ use crate::{
     service::{AlarmService, AlarmStatus},
 };
 
-pub struct Cycle<S: AlarmService> {
+pub struct Cycle {
     check_interval: u64,
     alarms: Mutex<VecDeque<Alarm>>,
-    service: Arc<RwLock<S>>,
+    service: Arc<RwLock<AlarmService>>,
 }
 
-impl<S: AlarmService> Cycle<S> {
-    pub async fn init(check_interval: u64, service: Arc<RwLock<S>>) -> Self {
+impl Cycle {
+    pub async fn init(check_interval: u64, service: Arc<RwLock<AlarmService>>) -> Self {
         let initial_alarms = {
             let service = service.read().await;
             service.get_alarms()
