@@ -32,5 +32,7 @@ hound = "3.5"
 cpal = "0.16"
 futures = "0.3"
 
+uuid = { version = "1.0", features = ["v4"]}
+
 [dev-dependencies]
 ctor = "0.2"

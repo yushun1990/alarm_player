@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::str::FromStr;
 use time::OffsetDateTime;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
-use crate::model::Alarm;
+use crate::{config::PlayMode, model::Alarm};
 
 pub enum AlarmStatus {
     Playable,
@@ -27,12 +27,21 @@ pub struct House {
     pub is_empty_mode: bool,
 }
 
-pub enum PlayContent {
-    Url(String),
-    TTS(String),
+#[derive(Default, Clone)]
+pub struct BoxConfig {
+    pub enabled: bool,
+    pub volume: f32,
 }
 
-#[derive(Clone)]
+#[derive(Default, Clone)]
+pub struct PostConfig {
+    pub device_ids: Vec<u32>,
+    pub speed: u8,
+    pub duration: u64,
+    pub play_mode: PlayMode,
+}
+
+#[derive(Default, Clone)]
 pub struct AlarmService {
     // 测试报警触发 crontab 表达方式
     pub crontab: Option<String>,
@@ -46,21 +55,50 @@ pub struct AlarmService {
     pub house_set: HashMap<String, House>,
     /// 鸡场语言
     pub language: Option<String>,
-    /// 报警播放模式 music/tts
-    pub alarm_play_mode: String,
-    /// 报警音乐地址
-    pub alarm_media_url: String,
-    /// 测试报警地址
-    pub test_media_url: String,
+    /// 默认语言
+    pub default_language: String,
     /// 测试报警持续时长
     pub test_play_duration: u64,
     /// 国际化本地配置
     pub localization_set: HashMap<String, Localization>,
-    /// 音柱列表
-    pub soundposts: Vec<u32>,
+    /// 音柱配置
+    pub soundbox: BoxConfig,
+    /// 音柱配置
+    pub soundposts: PostConfig,
+    /// 循环播放间隔
+    pub play_interval_secs: u64,
 }
 
 impl AlarmService {
+    pub fn new(
+        play_delay_secs: u64,
+        default_language: String,
+        default_play_mode: PlayMode,
+        test_play_duration: u64,
+        play_interval_secs: u64,
+    ) -> Self {
+        Self {
+            play_delay_secs,
+            is_alarm_paused: false,
+            alarm_set: HashMap::new(),
+            house_set: HashMap::new(),
+            default_language,
+            test_play_duration,
+            localization_set: HashMap::new(),
+            soundbox: BoxConfig {
+                enabled: true,
+                volume: 0.5,
+            },
+            soundposts: PostConfig {
+                device_ids: Vec::new(),
+                speed: 50,
+                duration: 60,
+                play_mode: default_play_mode,
+            },
+            play_interval_secs,
+            ..Default::default()
+        }
+    }
     pub fn init_localization_set(&mut self, localization_path: String) {
         if let Ok(entries) = fs::read_dir(localization_path) {
             for entry in entries {
@@ -209,84 +247,105 @@ impl AlarmService {
         self.test_play_duration = duration
     }
 
-    pub fn get_alarm_content(&self, alarm: &Alarm) -> PlayContent {
-        if self.alarm_play_mode == "music" {
-            return PlayContent::Url(self.alarm_media_url.clone());
-        }
-
+    pub fn get_alarm_content(&self, alarm: &Alarm) -> anyhow::Result<String> {
         let house_name = match self.house_set.get(&alarm.house_code) {
             Some(house) => house.name.clone(),
-            None => "".into(),
+            None => anyhow::bail!("House not exist with code: {}", alarm.house_code),
         };
 
         let status = match alarm.content.split(" ").last() {
             Some(content) => content,
-            None => "",
+            None => {
+                anyhow::bail!("Valid alarm content is empty, origin: {}", alarm.content);
+            }
         };
 
         let (alarm_item, status) = match self.language.clone() {
-            Some(ln) => match self.localization_set.get(&ln) {
-                Some(localization) => {
-                    let alarm_item = match localization.texts.get(&alarm.alarm_item) {
-                        Some(txt) => txt.clone(),
-                        None => alarm.alarm_item.clone(),
-                    };
+            Some(ln) => {
+                if ln == self.default_language {
+                    (alarm.alarm_item.clone(), status)
+                } else {
+                    match self.localization_set.get(&ln) {
+                        Some(localization) => {
+                            let alarm_item = match localization.texts.get(&alarm.alarm_item) {
+                                Some(txt) => txt.clone(),
+                                None => {
+                                    error!(
+                                        "Content:{} not matched in language configuration, use origin.",
+                                        alarm.alarm_item
+                                    );
+                                    alarm.alarm_item.clone()
+                                }
+                            };
 
-                    if status == "" {
-                        (alarm_item, status)
-                    } else {
-                        let status = match localization.texts.get(status) {
-                            Some(txt) => txt,
-                            None => "",
-                        };
+                            if status == "" {
+                                (alarm_item, status)
+                            } else {
+                                let status = match localization.texts.get(status) {
+                                    Some(txt) => txt,
+                                    None => {
+                                        error!(
+                                            "Status:{} not matched in language configuration, use origin",
+                                            status
+                                        );
+                                        status
+                                    }
+                                };
 
-                        (alarm_item, status)
+                                (alarm_item, status)
+                            }
+                        }
+                        None => {
+                            error!("Language: {} not supported, use origin.", ln);
+                            (alarm.alarm_item.clone(), status)
+                        }
                     }
                 }
-                None => (alarm.alarm_item.clone(), status),
-            },
-            None => (alarm.alarm_item.clone(), status),
+            }
+            None => {
+                error!("Language not setted, use origin content.");
+                (alarm.alarm_item.clone(), status)
+            }
         };
 
-        PlayContent::TTS(format!("[{house_name}] {alarm_item} {status}"))
+        Ok(format!("[{house_name}] {alarm_item} {status}"))
     }
 
-    pub fn set_alarm_play_mode(&mut self, alarm_play_mode: String) {
-        for s in vec!["music", "tts"] {
-            if alarm_play_mode == s {
-                self.alarm_play_mode = alarm_play_mode;
-                return;
-            }
-        }
+    pub fn set_soundbox(&mut self, soundbox: BoxConfig) {
+        self.soundbox = soundbox;
     }
 
-    pub fn set_soundposts(&mut self, mut soundposts: Vec<u32>) {
-        self.soundposts.clear();
-        self.soundposts.append(&mut soundposts);
+    pub fn get_soundbox(&self) -> BoxConfig {
+        self.soundbox.clone()
     }
 
-    pub fn get_soundposts(&self) -> Vec<u32> {
+    pub fn set_soundposts(&mut self, soundposts: PostConfig) {
+        self.soundposts = soundposts;
+    }
+
+    pub fn get_soundposts(&self) -> PostConfig {
         self.soundposts.clone()
+    }
+
+    pub fn set_play_interval_secs(&mut self, play_interval_secs: u64) {
+        self.play_interval_secs = play_interval_secs;
+    }
+
+    pub fn get_play_interval_secs(&self) -> u64 {
+        self.play_delay_secs.clone()
+    }
+
+    pub async fn play_record(&mut self, alarm: &Alarm, result: PlayResult) {
+        info!(
+            "Add play record, id: {}, has_error: {}, alarm: {:?}",
+            result.id, result.has_error, alarm
+        );
     }
 }
 
-impl Default for AlarmService {
-    fn default() -> Self {
-        Self {
-            crontab: Default::default(),
-            play_delay_secs: 20,
-            is_alarm_paused: false,
-            alarm_set: HashMap::new(),
-            house_set: HashMap::new(),
-            language: Default::default(),
-            alarm_play_mode: "tts".into(),
-            alarm_media_url: "http://host.docker.internal:80/NewAlarm.wav".into(),
-            test_media_url: "http://host.docker.internal:80/TestAlarm.wav".into(),
-            test_play_duration: 30,
-            localization_set: HashMap::new(),
-            soundposts: Vec::new(),
-        }
-    }
+pub struct PlayResult {
+    pub id: String,
+    pub has_error: bool,
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]

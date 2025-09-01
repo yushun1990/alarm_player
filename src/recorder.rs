@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::BufWriter,
+    os::unix::fs,
     sync::{Arc, Mutex},
 };
 
@@ -12,10 +13,9 @@ use tracing::{error, info};
 
 type WavWriterHandle = Arc<Mutex<Option<hound::WavWriter<BufWriter<File>>>>>;
 
-// Recorder 现在作为一个状态管理器
 pub struct Recorder {
     storage_path: String,
-    link_path: String, // 这个字段在您的代码中未使用，但我们保留它
+    link_path: String,
 }
 
 impl Recorder {
@@ -26,6 +26,7 @@ impl Recorder {
         }
     }
 
+    #[allow(unreachable_code)]
     pub fn start(&self, filename: String) -> anyhow::Result<(cpal::Stream, WavWriterHandle)> {
         let device = match cpal::default_host().default_input_device() {
             Some(device) => device,
@@ -34,11 +35,11 @@ impl Recorder {
 
         let config = device
             .default_input_config()
-            .inspect_err(|e| error!("No default input config found."))?;
+            .inspect_err(|e| error!("No default input config found: {e}"))?;
 
         let path = format!("{}/{}", self.storage_path, filename);
         let spec = Self::wav_format_from_config(&config);
-        let writer = hound::WavWriter::create(path, spec)?;
+        let writer = hound::WavWriter::create(path.clone(), spec)?;
         let writer = Arc::new(Mutex::new(Some(writer)));
 
         let writer_clone = writer.clone();
@@ -77,6 +78,10 @@ impl Recorder {
                 return anyhow::bail!("Unsupported sample format: {sample_format}");
             }
         };
+
+        let link_path = format!("{}/sl_{}", self.link_path, filename);
+        fs::symlink(path, link_path.clone())
+            .inspect_err(|e| error!("Failed for creating link path:{}, error: {e}", link_path))?;
 
         stream
             .play()
@@ -140,18 +145,8 @@ mod recorder_tests {
     use crate::recorder::Recorder;
     use std::{thread::sleep, time::Duration};
 
-    // 辅助函数：初始化日志，方便调试
-    fn setup_tracing() {
-        let subscriber = tracing_subscriber::FmtSubscriber::builder()
-            .with_max_level(tracing::Level::INFO)
-            .finish();
-        let _ = tracing::subscriber::set_global_default(subscriber);
-    }
-
     #[test]
     fn record_test() {
-        setup_tracing(); // 初始化日志记录器
-
         // 确保 /tmp 目录存在
         std::fs::create_dir_all("/tmp").unwrap();
 

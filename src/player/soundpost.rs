@@ -7,13 +7,17 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
-use crate::service::PlayContent;
+pub enum PlayContent {
+    Url(String),
+    Tts(String),
+}
 
 #[derive(Clone, Serialize)]
 pub struct SpeechRequest {
     pub device_ids: Vec<u32>,
     pub url: Option<String>,
     pub text: Option<String>,
+    pub speech: Option<u8>,
     pub volume: u8,
     #[serde(rename = "loop")]
     pub speech_loop: SpeechLoop,
@@ -124,6 +128,7 @@ pub struct SpeechResultData {
     pub message: String,
 }
 
+#[derive(Clone)]
 pub struct Soundpost {
     api_host: String,
     client: Client,
@@ -251,6 +256,10 @@ impl Soundpost {
 
             match serde_json::from_str::<StatusResult>(pid.body.as_str()) {
                 Ok(status) => {
+                    if status.code != StatusCode::OK {
+                        error!("Status result failed with message: {}", status.message);
+                        return false;
+                    }
                     if let Some(s) = status.data {
                         if s.speech {
                             // 有一个处于speech状态即视为未完成
@@ -273,16 +282,19 @@ impl Soundpost {
         return true;
     }
 
+    #[allow(unreachable_code)]
     pub async fn play(
         &self,
         device_ids: Vec<u32>,
         media: PlayContent,
+        speed: Option<u8>,
         speech_loop: SpeechLoop,
     ) -> anyhow::Result<()> {
         // 先取消所有播放
         self.cancel(&device_ids).await;
 
-        let request = Self::build_speech_request(device_ids.clone(), media, speech_loop.clone());
+        let request =
+            Self::build_speech_request(device_ids.clone(), media, speed, speech_loop.clone());
         let resp: SpeechResp = self
             .client
             .post(format!("http://{}/v1/speech", self.api_host))
@@ -360,10 +372,11 @@ impl Soundpost {
     fn build_speech_request(
         device_ids: Vec<u32>,
         media: PlayContent,
+        speed: Option<u8>,
         speech_loop: SpeechLoop,
     ) -> SpeechRequest {
         let (url, text) = match media {
-            PlayContent::TTS(tts) => (None, Some(tts)),
+            PlayContent::Tts(tts) => (None, Some(tts)),
             PlayContent::Url(url) => (Some(url), None),
         };
 
@@ -371,6 +384,7 @@ impl Soundpost {
             device_ids,
             url,
             text,
+            speech: speed,
             volume: 100,
             speech_loop,
         }
@@ -387,17 +401,8 @@ impl Soundpost {
 
 #[cfg(test)]
 mod soundpost_tests {
+    use crate::player::{PlayContent, Soundpost, SpeechLoop};
     use std::time::Duration;
-
-    use crate::{
-        player::{Soundpost, soundpost::SpeechLoop},
-        service::PlayContent,
-    };
-
-    #[ctor::ctor]
-    fn init() {
-        // tracing_subscriber::fmt().with_env_filter("info").init();
-    }
 
     #[tokio::test]
     async fn test_play() {
@@ -412,6 +417,7 @@ mod soundpost_tests {
             .play(
                 vec![1, 2],
                 PlayContent::Url(url),
+                None,
                 SpeechLoop {
                     duration: 60,
                     times: 1,

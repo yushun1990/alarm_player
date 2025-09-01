@@ -25,7 +25,9 @@ pub struct DbConfig {
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
-            connection: Some("postgres://postgres:BHzpdmYyyAV1*GHm@192.168.77.34:5432/AwingIB2?currentSchema=public".into()),
+            connection: Some(
+                "postgres://bh:123456@127.0.0.1:5432/AwingIB2?currentSchema=public".into(),
+            ),
             max_conns: Default::default(),
             min_conns: Default::default(),
             conn_timeout_millis: Default::default(),
@@ -196,8 +198,14 @@ pub struct AlarmConfig {
     cycle_interval_secs: Option<u64>,
     // 报警播放间隔
     play_interval_secs: Option<u64>,
+    // 播放延时
+    play_delay_secs: Option<u64>,
+    // 默认测试报警播放时长
+    default_test_play_duration: Option<u64>,
     // 报警测试调度为空时检测周期
     empty_schedule_secs: Option<u64>,
+    // 默认语言
+    default_language: Option<String>,
 }
 
 impl Default for AlarmConfig {
@@ -206,7 +214,10 @@ impl Default for AlarmConfig {
             asc_interval_secs: Some(5),
             cycle_interval_secs: Some(5),
             play_interval_secs: Some(5),
+            play_delay_secs: Some(20),
+            default_test_play_duration: Some(60),
             empty_schedule_secs: Some(5),
+            default_language: Some("zh_cn".into()),
         }
     }
 }
@@ -236,11 +247,35 @@ impl AlarmConfig {
         }
     }
 
+    pub fn play_delay_secs(&self) -> u64 {
+        if let Some(play_delay_secs) = self.play_delay_secs {
+            play_delay_secs
+        } else {
+            Self::default().play_delay_secs.unwrap()
+        }
+    }
+
+    pub fn default_test_play_duration(&self) -> u64 {
+        if let Some(default_test_play_duration) = self.default_test_play_duration {
+            default_test_play_duration
+        } else {
+            Self::default().default_test_play_duration.unwrap()
+        }
+    }
+
     pub fn empty_schedule_secs(&self) -> u64 {
         if let Some(empty_schedule_secs) = self.empty_schedule_secs {
             empty_schedule_secs
         } else {
             Self::default().empty_schedule_secs.unwrap()
+        }
+    }
+
+    pub fn default_langauge(&self) -> String {
+        if let Some(default_language) = self.default_language.clone() {
+            default_language
+        } else {
+            Self::default().default_language.unwrap()
         }
     }
 }
@@ -289,9 +324,96 @@ impl QueueConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RecorderConfig {
+    // 报警录音存储路径
+    record_storage_path: Option<String>,
+    // 报警录音连接存储路径
+    record_link_path: Option<String>,
+}
+
+impl Default for RecorderConfig {
+    fn default() -> Self {
+        Self {
+            record_storage_path: Some("/data/alarm_player/records".to_string()),
+            record_link_path: Some("/data/alarm_player/link".to_string()),
+        }
+    }
+}
+
+impl RecorderConfig {
+    pub fn record_storage_path(&self) -> String {
+        if let Some(record_storage_path) = self.record_storage_path.clone() {
+            record_storage_path
+        } else {
+            Self::default().record_storage_path.unwrap()
+        }
+    }
+
+    pub fn record_link_path(&self) -> String {
+        if let Some(record_link_path) = self.record_link_path.clone() {
+            record_link_path
+        } else {
+            Self::default().record_link_path.unwrap()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SoundboxConfig {
+    // 报警播放音频文件
+    alarm_media_name: Option<String>,
+    // 测试报警音频文件
+    test_media_name: Option<String>,
+}
+
+impl Default for SoundboxConfig {
+    fn default() -> Self {
+        Self {
+            alarm_media_name: Some("alarm.wav".to_string()),
+            test_media_name: Some("test_alarm.wav".to_string()),
+        }
+    }
+}
+
+impl SoundboxConfig {
+    pub fn alarm_media_name(&self) -> String {
+        if let Some(alarm_media_name) = self.alarm_media_name.clone() {
+            alarm_media_name
+        } else {
+            Self::default().alarm_media_name.unwrap()
+        }
+    }
+
+    pub fn test_media_name(&self) -> String {
+        if let Some(test_media_name) = self.test_media_name.clone() {
+            test_media_name
+        } else {
+            Self::default().test_media_name.unwrap()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum PlayMode {
+    #[serde(rename = "music")]
+    Music,
+    #[serde(rename = "tts")]
+    Tts,
+}
+
+impl Default for PlayMode {
+    fn default() -> Self {
+        PlayMode::Tts
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct SoundpostConfig {
     api_host: Option<String>,
     api_login_token: Option<String>,
+    alarm_media_url: Option<String>,
+    test_media_url: Option<String>,
+    play_mode: Option<PlayMode>,
 }
 
 impl Default for SoundpostConfig {
@@ -299,6 +421,9 @@ impl Default for SoundpostConfig {
         Self {
             api_host: Some("127.0.0.1:8080".into()),
             api_login_token: Some("YWRtaW46YWRtaW5fYXBpX2tleQ==".into()),
+            alarm_media_url: Some("http://host.docker.internal:80/NewAlarm.wav".into()),
+            test_media_url: Some("http://host.docker.internal:80/TestAlarm.wav".into()),
+            play_mode: Some(PlayMode::Tts),
         }
     }
 }
@@ -319,6 +444,30 @@ impl SoundpostConfig {
             Self::default().api_login_token.unwrap()
         }
     }
+
+    pub fn alarm_media_url(&self) -> String {
+        if let Some(alarm_media_url) = self.alarm_media_url.clone() {
+            alarm_media_url
+        } else {
+            Self::default().alarm_media_url.unwrap()
+        }
+    }
+
+    pub fn test_media_url(&self) -> String {
+        if let Some(test_media_url) = self.test_media_url.clone() {
+            test_media_url
+        } else {
+            Self::default().test_media_url.unwrap()
+        }
+    }
+
+    pub fn play_mode(&self) -> PlayMode {
+        if let Some(play_mode) = self.play_mode.clone() {
+            play_mode
+        } else {
+            Self::default().play_mode.unwrap()
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -334,7 +483,11 @@ pub struct Config {
     #[serde(default)]
     pub queue: QueueConfig,
     #[serde(default)]
+    pub soundbox: SoundboxConfig,
+    #[serde(default)]
     pub soundpost: SoundpostConfig,
+    #[serde(default)]
+    pub recorder: RecorderConfig,
 }
 
 impl Config {

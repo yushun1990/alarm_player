@@ -1,5 +1,5 @@
 mod soundpost;
-pub use soundpost::{Soundpost, SpeechLoop};
+pub use soundpost::{PlayContent, Soundpost, SpeechLoop};
 
 mod soundbox;
-pub use soundbox::Soundbox;
+pub use soundbox::{Buffer, Soundbox};

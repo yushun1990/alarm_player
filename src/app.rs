@@ -14,6 +14,8 @@ use crate::{
     handler::{ActAlarmHandler, DefaultHandler, TestAlarm, TestAlarmHandler},
     model::Alarm,
     mqtt_client::MqttClient,
+    player::Soundpost,
+    recorder::Recorder,
     service::AlarmService,
     task::{Cycle, Play, RealTime},
 };
@@ -31,13 +33,33 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     let (player_tx, player_rx) = channel::<Alarm>(config.queue.real_time_size());
     let (ct_tx, ct_rx) = channel::<String>(10);
 
+    let alarm_media_name = config.soundbox.alarm_media_name();
+    let test_media_name = config.soundbox.test_media_name();
+    let alarm_media_url = config.soundpost.alarm_media_url();
+    let test_media_url = config.soundpost.test_media_url();
+    let soundpost = Soundpost::new(
+        config.soundpost.api_host(),
+        config.soundpost.api_login_token(),
+    );
+
+    let recorder = Recorder::new(
+        config.recorder.record_storage_path(),
+        config.recorder.record_link_path(),
+    );
     let play_serivce = service.clone();
-    let api_host = config.soundpost.api_host();
-    let api_login_token = config.soundpost.api_login_token();
+
     let play_handle = tokio::spawn(async move {
-        Play::new(api_host, api_login_token, play_serivce)
-            .run(cycle_tx, player_rx)
-            .await;
+        Play::new(
+            alarm_media_name,
+            test_media_name,
+            alarm_media_url,
+            test_media_url,
+            soundpost,
+            recorder,
+            play_serivce,
+        )
+        .run(cycle_tx, player_rx)
+        .await;
     });
 
     let shutdown = Arc::new(Notify::new());

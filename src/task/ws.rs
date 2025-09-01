@@ -24,6 +24,7 @@ pub struct WsClient {
     pub token: String,
 }
 
+#[allow(unreachable_code)]
 impl WsClient {
     pub async fn new(api_host: String) -> anyhow::Result<Self> {
         let client = reqwest::Client::new();
