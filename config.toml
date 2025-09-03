@@ -6,3 +6,5 @@ recorder = { record_storage_path = "/tmp", record_link_path = "/tmp"}
 soundbox = { test_media_path = "/home/yushun/Project/alarm_player/resource/please-calm-my-mind-125566.wav", alarm_media_path = "/home/yushun/Project/alarm_player/resource/smooth-ac-guitar-loop-93bpm-137706.mp3" }
 
 soundpost = { api_host = "192.168.77.14:8080", api_login_token = "YWRtaW46YWRtaW5fYXBpX2tleQ==", alarm_media_url = "http://192.168.77.14:8080/music/9bf638a7797d18b1bf91779016afd3ae.mp3", test_media_url = "http://192.168.77.14:8080/music/04c204bd445c7cc19b488269067a60e0.wav", play_mode = "music" }
+
+alarm = { default_test_play_duration = 180, test_min_duration=175, alarm_min_duration=30 }

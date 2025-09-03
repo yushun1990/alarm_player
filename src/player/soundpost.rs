@@ -5,8 +5,8 @@ use reqwest::{
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info, warn};
+use tokio::sync::mpsc;
+use tracing::{debug, error, info};
 
 #[derive(Debug)]
 pub enum PlayContent {
@@ -348,8 +348,8 @@ impl Soundpost {
             );
         }
 
-        let duration = speech_loop.duration;
-        let max_wait_duration = duration + 1;
+        let duration = speech_loop.duration - 1;
+        let max_wait_duration = speech_loop.duration + 1;
         tokio::select! {
             _ = rx.recv() => {
                 info!("Soundpost canceled by rx signal");

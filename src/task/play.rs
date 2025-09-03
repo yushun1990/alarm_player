@@ -5,7 +5,7 @@ use tokio::sync::{
     Mutex, RwLock,
     mpsc::{self, Receiver, Sender},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -81,13 +81,13 @@ impl Play {
             if let Some(tx) = box_tx.alarm_tx.take() {
                 info!("Cancel box alarm playing...");
                 if let Err(e) = tx.send(()).await {
-                    error!("Failed for signaling by box.alarm_tx: {:?}", e);
+                    warn!("Failed for signaling by box.alarm_tx: {:?}", e);
                 }
             }
             if let Some(tx) = box_tx.test_tx.take() {
                 info!("Cancel box test alarm playing...");
                 if let Err(e) = tx.send(()).await {
-                    error!("Failed for signaling by box.test_tx: {:?}", e);
+                    warn!("Failed for signaling by box.test_tx: {:?}", e);
                 }
             }
         }
@@ -97,14 +97,14 @@ impl Play {
             if let Some(tx) = post_tx.test_tx.take() {
                 info!("Cancel post test alarm playing...");
                 if let Err(e) = tx.send(()).await {
-                    error!("Failed for signaling by post.test_tx: {:?}", e);
+                    warn!("Failed for signaling by post.test_tx: {:?}", e);
                 }
             }
 
             if let Some(tx) = post_tx.alarm_tx.take() {
                 info!("Cancel post alarm playing...");
                 if let Err(e) = tx.send(()).await {
-                    error!("Failed for signaling by post.alarm_tx: {:?}", e);
+                    warn!("Failed for signaling by post.alarm_tx: {:?}", e);
                 }
             }
         }

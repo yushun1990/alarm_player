@@ -1,7 +1,7 @@
 use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
 
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, source::Buffered};
-use tokio::sync::{mpsc, oneshot::Receiver};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use super::SpeechLoop;
