@@ -202,6 +202,12 @@ pub struct AlarmConfig {
     play_delay_secs: Option<u64>,
     // 默认测试报警播放时长
     default_test_play_duration: Option<u64>,
+    // 报警测试音乐最小时长
+    test_min_duration: Option<u64>,
+    // 报警音乐播放最小时长
+    alarm_min_duration: Option<u64>,
+    // 语音最小播放时长
+    speech_min_duration: Option<u64>,
     // 报警测试调度为空时检测周期
     empty_schedule_secs: Option<u64>,
     // 默认语言
@@ -216,6 +222,9 @@ impl Default for AlarmConfig {
             play_interval_secs: Some(5),
             play_delay_secs: Some(20),
             default_test_play_duration: Some(60),
+            test_min_duration: Some(30),
+            alarm_min_duration: Some(15),
+            speech_min_duration: Some(10),
             empty_schedule_secs: Some(5),
             default_language: Some("zh_cn".into()),
         }
@@ -276,6 +285,30 @@ impl AlarmConfig {
             default_language
         } else {
             Self::default().default_language.unwrap()
+        }
+    }
+
+    pub fn test_min_duration(&self) -> u64 {
+        if let Some(duration) = self.test_min_duration.clone() {
+            duration
+        } else {
+            Self::default().test_min_duration.unwrap()
+        }
+    }
+
+    pub fn alarm_min_duration(&self) -> u64 {
+        if let Some(duration) = self.alarm_min_duration.clone() {
+            duration
+        } else {
+            Self::default().alarm_min_duration.unwrap()
+        }
+    }
+
+    pub fn speech_min_duration(&self) -> u64 {
+        if let Some(duration) = self.speech_min_duration.clone() {
+            duration
+        } else {
+            Self::default().speech_min_duration.unwrap()
         }
     }
 }
@@ -361,34 +394,34 @@ impl RecorderConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SoundboxConfig {
     // 报警播放音频文件
-    alarm_media_name: Option<String>,
+    alarm_media_path: Option<String>,
     // 测试报警音频文件
-    test_media_name: Option<String>,
+    test_media_path: Option<String>,
 }
 
 impl Default for SoundboxConfig {
     fn default() -> Self {
         Self {
-            alarm_media_name: Some("alarm.wav".to_string()),
-            test_media_name: Some("test_alarm.wav".to_string()),
+            alarm_media_path: Some("./resource/alarm.wav".to_string()),
+            test_media_path: Some("./resource/test_alarm.wav".to_string()),
         }
     }
 }
 
 impl SoundboxConfig {
-    pub fn alarm_media_name(&self) -> String {
-        if let Some(alarm_media_name) = self.alarm_media_name.clone() {
-            alarm_media_name
+    pub fn alarm_media_path(&self) -> String {
+        if let Some(alarm_media_path) = self.alarm_media_path.clone() {
+            alarm_media_path
         } else {
-            Self::default().alarm_media_name.unwrap()
+            Self::default().alarm_media_path.unwrap()
         }
     }
 
-    pub fn test_media_name(&self) -> String {
-        if let Some(test_media_name) = self.test_media_name.clone() {
-            test_media_name
+    pub fn test_media_path(&self) -> String {
+        if let Some(test_media_path) = self.test_media_path.clone() {
+            test_media_path
         } else {
-            Self::default().test_media_name.unwrap()
+            Self::default().test_media_path.unwrap()
         }
     }
 }

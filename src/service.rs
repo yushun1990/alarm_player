@@ -33,12 +33,10 @@ pub struct BoxConfig {
     pub volume: f32,
 }
 
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct PostConfig {
     pub device_ids: Vec<u32>,
     pub speed: u8,
-    pub duration: u64,
-    pub play_mode: PlayMode,
 }
 
 #[derive(Default, Clone)]
@@ -73,7 +71,6 @@ impl AlarmService {
     pub fn new(
         play_delay_secs: u64,
         default_language: String,
-        default_play_mode: PlayMode,
         test_play_duration: u64,
         play_interval_secs: u64,
     ) -> Self {
@@ -88,12 +85,6 @@ impl AlarmService {
             soundbox: BoxConfig {
                 enabled: true,
                 volume: 0.5,
-            },
-            soundposts: PostConfig {
-                device_ids: Vec::new(),
-                speed: 50,
-                duration: 60,
-                play_mode: default_play_mode,
             },
             play_interval_secs,
             ..Default::default()
@@ -161,8 +152,12 @@ impl AlarmService {
                 return false;
             }
             None => {
-                let _ = self.alarm_set.insert(key, alarm);
-                true
+                if alarm.is_alarm {
+                    let _ = self.alarm_set.insert(key, alarm);
+                    return true;
+                }
+
+                return false;
             }
         }
     }

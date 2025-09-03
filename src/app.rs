@@ -29,14 +29,18 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
         .init();
 
     let (real_time_tx, real_time_rx) = channel::<Alarm>(config.queue.real_time_size());
-    let (cycle_tx, cycle_rx) = channel::<Alarm>(config.queue.real_time_size());
-    let (player_tx, player_rx) = channel::<Alarm>(config.queue.real_time_size());
+    let (cycle_tx, cycle_rx) = channel::<Alarm>(config.queue.cycle_size());
+    let (player_tx, player_rx) = channel::<Alarm>(config.queue.player_size());
     let (ct_tx, ct_rx) = channel::<String>(10);
 
-    let alarm_media_name = config.soundbox.alarm_media_name();
-    let test_media_name = config.soundbox.test_media_name();
+    let alarm_media_path = config.soundbox.alarm_media_path();
+    let test_media_path = config.soundbox.test_media_path();
     let alarm_media_url = config.soundpost.alarm_media_url();
     let test_media_url = config.soundpost.test_media_url();
+    let alarm_min_duration = config.alarm.alarm_min_duration();
+    let test_min_duration = config.alarm.test_min_duration();
+    let speech_min_duration = config.alarm.speech_min_duration();
+    let play_mode = config.soundpost.play_mode();
     let soundpost = Soundpost::new(
         config.soundpost.api_host(),
         config.soundpost.api_login_token(),
@@ -48,18 +52,22 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     );
     let play_serivce = service.clone();
 
+    let play = Play::new(
+        alarm_media_path,
+        test_media_path,
+        alarm_media_url,
+        test_media_url,
+        alarm_min_duration,
+        test_min_duration,
+        speech_min_duration,
+        play_mode,
+        soundpost,
+        recorder,
+        play_serivce,
+    );
+    let play_clone = play.clone();
     let play_handle = tokio::spawn(async move {
-        Play::new(
-            alarm_media_name,
-            test_media_name,
-            alarm_media_url,
-            test_media_url,
-            soundpost,
-            recorder,
-            play_serivce,
-        )
-        .run(cycle_tx, player_rx)
-        .await;
+        play_clone.run(cycle_tx, player_rx).await;
     });
 
     let shutdown = Arc::new(Notify::new());
@@ -75,10 +83,9 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     });
     let real_time_service = service.clone();
     let asc_interval_secs = config.alarm.asc_interval_secs();
+    let mut realtime = RealTime::new(asc_interval_secs, real_time_service);
     let real_time_handle = tokio::spawn(async move {
-        RealTime::new(asc_interval_secs, real_time_service)
-            .run(player_tx, real_time_rx)
-            .await;
+        realtime.run(player_tx, real_time_rx).await;
     });
 
     let handler = DefaultHandler::default();
@@ -93,10 +100,9 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     let (client, eventloop) = MqttClient::new(config.mqtt);
     let mqtt_client = client.clone();
     let empty_schedule_secs = config.alarm.empty_schedule_secs();
+    let mut test_alarm = TestAlarm::new(empty_schedule_secs, mqtt_client, service);
     let test_alarm_handle = tokio::spawn(async move {
-        TestAlarm::new(empty_schedule_secs, mqtt_client, service)
-            .run(real_time_tx, ct_rx)
-            .await;
+        test_alarm.run(real_time_tx, ct_rx).await;
     });
 
     let topics: Vec<String> = vec![
@@ -131,9 +137,21 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
         mqtt_subscribe_handle,
         real_time_handle,
         cycle_handle,
-        play_handle,
         test_alarm_handle
     );
 
+    info!("Notify player to cancel playing...");
+    play.canncel().await;
+    info!("Wait for player to end...");
+    let _ = play_handle.await;
+
     info!("==================== Alarm player exited ====================");
+}
+
+#[cfg(test)]
+mod app_tests {
+    #[ctor::ctor]
+    fn init() {
+        tracing_subscriber::fmt().with_env_filter("debug").init();
+    }
 }

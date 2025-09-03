@@ -9,10 +9,11 @@ use cpal::{
     FromSample, Sample,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 type WavWriterHandle = Arc<Mutex<Option<hound::WavWriter<BufWriter<File>>>>>;
 
+#[derive(Clone)]
 pub struct Recorder {
     storage_path: String,
     link_path: String,
@@ -123,10 +124,12 @@ impl Recorder {
     }
 
     pub fn stop(&self, stream: cpal::Stream, writer: WavWriterHandle) -> anyhow::Result<()> {
+        debug!("Drop stream...");
         drop(stream);
         let mut writer = writer
             .lock()
             .map_err(|e| anyhow::anyhow!("Lock writer failed: {e}"))?;
+        debug!("Got writer lock, try to finalize it...");
         let writer = writer
             .take()
             .ok_or_else(|| anyhow::anyhow!("Writer is None!"))?;
@@ -134,6 +137,7 @@ impl Recorder {
             .finalize()
             .map_err(|e| anyhow::anyhow!("Writer finalize failed: {e}"))?;
 
+        debug!("Recorder stopped");
         Ok(())
     }
 }
@@ -143,10 +147,10 @@ mod recorder_tests {
     use tracing::info;
 
     use crate::recorder::Recorder;
-    use std::{thread::sleep, time::Duration};
+    use std::time::Duration;
 
-    #[test]
-    fn record_test() {
+    #[tokio::test]
+    async fn record_test() {
         // 确保 /tmp 目录存在
         std::fs::create_dir_all("/tmp").unwrap();
 
@@ -156,7 +160,7 @@ mod recorder_tests {
         let (stream, writer) = recorder.start("test.wav".to_string()).unwrap();
 
         info!("Recording for 5 seconds...");
-        sleep(Duration::from_secs(30));
+        tokio::time::sleep(Duration::from_secs(5)).await;
 
         // 停止录制
         info!("Stopping recording...");

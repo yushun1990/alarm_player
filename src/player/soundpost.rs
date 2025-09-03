@@ -5,8 +5,10 @@ use reqwest::{
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
+#[derive(Debug)]
 pub enum PlayContent {
     Url(String),
     Tts(String),
@@ -23,7 +25,7 @@ pub struct SpeechRequest {
     pub speech_loop: SpeechLoop,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SpeechLoop {
     pub duration: u64,
     pub times: u32,
@@ -150,7 +152,7 @@ impl Soundpost {
     }
 
     // 取消播放，仅记录取消结果，不做取消结果判定
-    pub async fn cancel(&self, device_ids: &Vec<u32>) {
+    async fn cancel(&self, device_ids: &Vec<u32>) {
         let result: CancelResp = match self
             .client
             .delete(format!(
@@ -289,7 +291,12 @@ impl Soundpost {
         media: PlayContent,
         speed: Option<u8>,
         speech_loop: SpeechLoop,
+        mut rx: mpsc::Receiver<()>,
     ) -> anyhow::Result<()> {
+        debug!(
+            "play request, device_ids: {:?}; media: {:?}; speed: {:?}, loop: {:?}",
+            device_ids, media, speed, speech_loop
+        );
         // 先取消所有播放
         self.cancel(&device_ids).await;
 
@@ -340,30 +347,30 @@ impl Soundpost {
                 result.id, result_data.message
             );
         }
-        // 等待播放完成
-        tokio::time::sleep(Duration::from_secs(speech_loop.duration)).await;
 
-        // 循环检测是否播放完成
-        match tokio::time::timeout(
-            Duration::from_secs(1),
-            self.wait_for_play_finished(&device_ids),
-        )
-        .await
-        {
-            Ok(_) => {}
-            Err(_) => {
-                warn!(
-                    "Speecher not finished the playing in {} secs, try to cancel it ...",
-                    speech_loop.duration
-                );
+        let duration = speech_loop.duration;
+        let max_wait_duration = duration + 1;
+        tokio::select! {
+            _ = rx.recv() => {
+                info!("Soundpost canceled by rx signal");
                 self.cancel(&device_ids).await;
+            }
+            _ = tokio::time::sleep(Duration::from_secs(max_wait_duration)) => {
+                info!("Soundpost playing over {} secs, cancel it", max_wait_duration);
+                self.cancel(&device_ids).await;
+            }
+            _ = self.wait_for_play_finished(duration, &device_ids) => {
+                info!("Soundpost play finished");
             }
         }
 
+        debug!("Soundpost playing task finished!");
         Ok(())
     }
 
-    async fn wait_for_play_finished(&self, device_ids: &Vec<u32>) {
+    async fn wait_for_play_finished(&self, duration: u64, device_ids: &Vec<u32>) {
+        // 等待播放完成
+        tokio::time::sleep(Duration::from_secs(duration)).await;
         while !self.is_play_finished(device_ids).await {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -413,6 +420,7 @@ mod soundpost_tests {
 
         let url =
             String::from("http://192.168.77.14:8080/music/246610693611b3e86da7971c4e5365b0.mp3");
+        let (_, rx) = tokio::sync::mpsc::channel(1);
         let _ = player
             .play(
                 vec![1, 2],
@@ -423,6 +431,7 @@ mod soundpost_tests {
                     times: 1,
                     gap: 2,
                 },
+                rx,
             )
             .await;
     }
