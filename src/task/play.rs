@@ -12,14 +12,16 @@ use crate::{
     Recorder,
     config::PlayMode,
     model::Alarm,
-    player::{Buffer, PlayContent, Soundbox, Soundpost, SpeechLoop},
+    player::{
+        Buffer, PlayCancelType, PlayContent, PlayResultType, Soundbox, Soundpost, SpeechLoop,
+    },
     service::{AlarmService, AlarmStatus, BoxConfig, PlayResult, PostConfig},
 };
 
 #[derive(Default, Clone)]
 pub struct Tx {
-    test_tx: Option<Sender<()>>,
-    alarm_tx: Option<Sender<()>>,
+    test_tx: Option<Sender<PlayCancelType>>,
+    alarm_tx: Option<Sender<PlayCancelType>>,
 }
 
 #[derive(Clone)]
@@ -75,18 +77,12 @@ impl Play {
         Decoder::try_from(file).unwrap().buffered()
     }
 
-    pub async fn canncel(&self) {
+    async fn cancel_test(&self, cancel_type: &PlayCancelType) {
         {
             let mut box_tx = self.box_tx.lock().await;
-            if let Some(tx) = box_tx.alarm_tx.take() {
-                info!("Cancel box alarm playing...");
-                if let Err(e) = tx.send(()).await {
-                    warn!("Failed for signaling by box.alarm_tx: {:?}", e);
-                }
-            }
             if let Some(tx) = box_tx.test_tx.take() {
                 info!("Cancel box test alarm playing...");
-                if let Err(e) = tx.send(()).await {
+                if let Err(e) = tx.send(cancel_type.clone()).await {
                     warn!("Failed for signaling by box.test_tx: {:?}", e);
                 }
             }
@@ -96,18 +92,53 @@ impl Play {
             let mut post_tx = self.post_tx.lock().await;
             if let Some(tx) = post_tx.test_tx.take() {
                 info!("Cancel post test alarm playing...");
-                if let Err(e) = tx.send(()).await {
+                if let Err(e) = tx.send(cancel_type.clone()).await {
                     warn!("Failed for signaling by post.test_tx: {:?}", e);
                 }
             }
+        }
+    }
 
+    async fn cancel_alarm(&self, cancel_type: &PlayCancelType) {
+        {
+            let mut box_tx = self.box_tx.lock().await;
+            if let Some(tx) = box_tx.alarm_tx.take() {
+                info!("Cancel box alarm playing...");
+                if let Err(e) = tx.send(cancel_type.clone()).await {
+                    warn!("Failed for signaling by box.alarm_tx: {:?}", e);
+                }
+            }
+        }
+
+        {
+            let mut post_tx = self.post_tx.lock().await;
             if let Some(tx) = post_tx.alarm_tx.take() {
                 info!("Cancel post alarm playing...");
-                if let Err(e) = tx.send(()).await {
+                if let Err(e) = tx.send(cancel_type.clone()).await {
                     warn!("Failed for signaling by post.alarm_tx: {:?}", e);
                 }
             }
         }
+    }
+
+    async fn cancel(&self, cancel_type: PlayCancelType) {
+        match cancel_type {
+            PlayCancelType::AlarmArrived => {
+                self.cancel_test(&cancel_type).await;
+            }
+            PlayCancelType::Terminated => {
+                self.cancel_test(&cancel_type).await;
+                self.cancel_alarm(&cancel_type).await;
+            }
+        }
+    }
+
+    pub async fn cancel_test_play(&self) {
+        self.cancel(PlayCancelType::AlarmArrived).await;
+    }
+
+    pub async fn terminate_play(&self) {
+        self.cancel(PlayCancelType::Terminated).await;
     }
 
     pub async fn run(&self, alarm_tx: Sender<Alarm>, mut alarm_rx: Receiver<Alarm>) {
@@ -149,7 +180,7 @@ impl Play {
                 // 測試報警，直接播放
                 info!("Play test alarm: {:?}", alarm);
                 let result = self
-                    .play_test_alarm(
+                    .play_test(
                         box_config,
                         posts_config,
                         SpeechLoop {
@@ -225,7 +256,7 @@ impl Play {
         }
     }
 
-    async fn play_test_alarm(
+    async fn play_test(
         &self,
         sbox: BoxConfig,
         posts: PostConfig,
@@ -273,11 +304,20 @@ impl Play {
         let mut has_error = false;
 
         debug!("waitting for playing task to complete...");
-        for result in js.join_all().await {
-            debug!("Task finished result: {:?}", result);
-            if result.is_err() {
-                has_error = true;
-                break;
+        let mut result_type = PlayResultType::Normal;
+        while let Some(res) = js.join_next().await {
+            match res {
+                Ok(Ok(t)) => {
+                    result_type = t;
+                }
+                Ok(Err(e)) => {
+                    error!("Task failed: {e}");
+                    has_error = true;
+                }
+                Err(e) => {
+                    error!("Task failed: {e}");
+                    has_error = true;
+                }
             }
         }
 
@@ -292,7 +332,11 @@ impl Play {
 
         debug!("Recorder stopped, playing task finished!");
 
-        PlayResult { id, has_error }
+        PlayResult {
+            id,
+            has_error,
+            result_type,
+        }
     }
 
     async fn play_alarm(
@@ -346,13 +390,21 @@ impl Play {
         }
 
         let mut has_error = false;
-
+        let mut result_type = PlayResultType::Normal;
         debug!("waitting for playing task to complete...");
-        for result in js.join_all().await {
-            debug!("Task finished result: {:?}", result);
-            if result.is_err() {
-                has_error = true;
-                break;
+        while let Some(res) = js.join_next().await {
+            match res {
+                Ok(Ok(t)) => {
+                    result_type = t;
+                }
+                Ok(Err(e)) => {
+                    error!("Task failed: {e}");
+                    has_error = true;
+                }
+                Err(e) => {
+                    error!("Task failed: {e}");
+                    has_error = true;
+                }
             }
         }
 
@@ -363,7 +415,11 @@ impl Play {
                 .inspect_err(|e| error!("Close record writer failed: {e}"));
         }
 
-        PlayResult { id, has_error }
+        PlayResult {
+            id,
+            has_error,
+            result_type,
+        }
     }
 
     fn get_record_id() -> String {
@@ -379,7 +435,7 @@ mod play_tests {
     use tracing::info;
 
     use crate::{
-        config::PlayMode,
+        config::{DbConfig, PlayMode},
         player::{PlayContent, Soundpost, SpeechLoop},
         recorder::Recorder,
         service::{AlarmService, PostConfig},
@@ -400,7 +456,15 @@ mod play_tests {
         );
 
         let recorder = Recorder::new("/tmp".to_string(), "/tmp".to_string());
-        let mut service = AlarmService::new(5, "zh_CN".to_string(), 60, 2);
+        let mut service = AlarmService::new(
+            5,
+            "zh_CN".to_string(),
+            60,
+            2,
+            "http://192.168.77.34/api/IB/alarm-info/current-alarm-info-page-list-with-no-auth"
+                .to_string(),
+            DbConfig::default(),
+        );
         service.set_soundposts(PostConfig {
             device_ids: vec![1, 2],
             speed: 1,
@@ -444,7 +508,7 @@ mod play_tests {
             service.get_play_interval_secs()
         };
 
-        play.play_test_alarm(
+        play.play_test(
             box_config,
             posts_config,
             SpeechLoop {

@@ -94,13 +94,17 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     let handler = TAH::new("crontab", ct_tx).handler(handler);
 
     type AAH = ActAlarmHandler<TAH>;
-    let handler = AAH::new("repub_alarms", real_time_tx.clone()).handler(handler);
-    let handler = ActAlarmHandler::<AAH>::new("alarm", real_time_tx.clone()).handler(handler);
+    let play_clone = play.clone();
+    let handler = AAH::new("repub_alarms", real_time_tx.clone(), play_clone).handler(handler);
+    let play_clone = play.clone();
+    let handler =
+        ActAlarmHandler::<AAH>::new("alarm", real_time_tx.clone(), play_clone).handler(handler);
 
     let (client, eventloop) = MqttClient::new(config.mqtt);
     let mqtt_client = client.clone();
     let empty_schedule_secs = config.alarm.empty_schedule_secs();
-    let mut test_alarm = TestAlarm::new(empty_schedule_secs, mqtt_client, service);
+    let test_alarm_service = service.clone();
+    let mut test_alarm = TestAlarm::new(empty_schedule_secs, mqtt_client, test_alarm_service);
     let test_alarm_handle = tokio::spawn(async move {
         test_alarm.run(real_time_tx, ct_rx).await;
     });
@@ -122,6 +126,14 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
         }
     });
 
+    {
+        // 初始化报警表
+        let mut service = service.write().await;
+        if let Err(e) = service.init_alarm_set().await {
+            error!("Latest alarms init failed: {e}");
+        }
+    }
+
     #[cfg(unix)]
     let mut term_signal = signal(SignalKind::terminate()).unwrap();
 
@@ -141,7 +153,7 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     );
 
     info!("Notify player to cancel playing...");
-    play.canncel().await;
+    play.terminate_play().await;
     info!("Wait for player to end...");
     let _ = play_handle.await;
 

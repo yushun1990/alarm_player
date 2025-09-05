@@ -19,20 +19,21 @@ pub struct DbConfig {
     min_conns: Option<u32>,
     conn_timeout_millis: Option<u64>,
     idle_timeout_millis: Option<u64>,
-    enable_logging: Option<bool>,
+    logging_level: Option<String>,
 }
 
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
             connection: Some(
-                "postgres://bh:123456@127.0.0.1:5432/AwingIB2?currentSchema=public".into(),
+                "postgres://postgres:BHzpdmYyyAV1*GHm@127.0.0.1:5432/AwingIB2?currentSchema=public"
+                    .into(),
             ),
             max_conns: Default::default(),
             min_conns: Default::default(),
             conn_timeout_millis: Default::default(),
             idle_timeout_millis: Default::default(),
-            enable_logging: Default::default(),
+            logging_level: Some("info".to_string()),
         }
     }
 }
@@ -62,8 +63,8 @@ impl DbConfig {
         self.idle_timeout_millis
     }
 
-    pub fn enable_logging(&self) -> Option<bool> {
-        self.enable_logging
+    pub fn logging_level(&self) -> Option<String> {
+        self.logging_level.clone()
     }
 }
 
@@ -210,6 +211,8 @@ pub struct AlarmConfig {
     speech_min_duration: Option<u64>,
     // 报警测试调度为空时检测周期
     empty_schedule_secs: Option<u64>,
+    // 报警初始化接口地址
+    init_url: Option<String>,
     // 默认语言
     default_language: Option<String>,
 }
@@ -226,6 +229,10 @@ impl Default for AlarmConfig {
             alarm_min_duration: Some(15),
             speech_min_duration: Some(10),
             empty_schedule_secs: Some(5),
+            init_url: Some(
+                "http://127.0.0.1/api/IB/alarm-info/current-alarm-info-page-list-with-no-auth"
+                    .into(),
+            ),
             default_language: Some("zh_cn".into()),
         }
     }
@@ -309,6 +316,14 @@ impl AlarmConfig {
             duration
         } else {
             Self::default().speech_min_duration.unwrap()
+        }
+    }
+
+    pub fn init_url(&self) -> String {
+        if let Some(init_url) = self.init_url.clone() {
+            init_url
+        } else {
+            Self::default().init_url.unwrap()
         }
     }
 }

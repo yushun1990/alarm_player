@@ -4,7 +4,7 @@ use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, source::Buffered};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-use super::SpeechLoop;
+use super::{PlayCancelType, PlayResultType, SpeechLoop};
 
 pub type Buffer = Buffered<Decoder<BufReader<File>>>;
 
@@ -29,33 +29,40 @@ impl Soundbox {
         &self,
         buffer: Buffer,
         speech_loop: SpeechLoop,
-        mut rx: mpsc::Receiver<()>,
-    ) -> anyhow::Result<()> {
+        mut rx: mpsc::Receiver<PlayCancelType>,
+    ) -> anyhow::Result<PlayResultType> {
         let (stream, sink) = Self::create_sink()?;
         let _stream = stream;
         let sink = Arc::new(sink);
         let sink_clone = sink.clone();
 
-        let duration = speech_loop.duration;
+        let mut result_type = PlayResultType::Normal;
 
+        let duration = speech_loop.duration;
         tokio::select! {
-            _ = rx.recv() => {
+            cancel_type = rx.recv() => {
                 info!("Soundbox canceld by rx singnal.");
                 sink.stop();
+                match cancel_type {
+                    Some(cancel_type) => result_type = PlayResultType::Canceled(cancel_type),
+                    None => {}
+                }
             }
             _ = tokio::time::sleep(Duration::from_secs(duration)) => {
                 info!("Soundbox was playing over {} secs, cancelling it.", duration);
                 sink.stop();
+                result_type = PlayResultType::Timeout;
             }
             _ = async move {
-                for _ in 0..speech_loop.times {
+                for i in 0..speech_loop.times {
                     sink_clone.append(buffer.clone());
                     tokio::time::sleep(Duration::from_secs(self.0)).await;
                     while !sink_clone.empty() {
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
-
-                    tokio::time::sleep(Duration::from_secs(speech_loop.gap)).await;
+                    if i+1 < speech_loop.times {
+                        tokio::time::sleep(Duration::from_secs(speech_loop.gap)).await;
+                    }
                 }
             } => {
                 info!("Soundbox finished playing.");
@@ -64,7 +71,7 @@ impl Soundbox {
 
         debug!("Soundbox playing task finished!");
 
-        Ok(())
+        Ok(result_type)
     }
 }
 

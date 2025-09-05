@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
+use super::{PlayCancelType, PlayResultType};
+
 #[derive(Debug)]
 pub enum PlayContent {
     Url(String),
@@ -291,8 +293,8 @@ impl Soundpost {
         media: PlayContent,
         speed: Option<u8>,
         speech_loop: SpeechLoop,
-        mut rx: mpsc::Receiver<()>,
-    ) -> anyhow::Result<()> {
+        mut rx: mpsc::Receiver<PlayCancelType>,
+    ) -> anyhow::Result<PlayResultType> {
         debug!(
             "play request, device_ids: {:?}; media: {:?}; speed: {:?}, loop: {:?}",
             device_ids, media, speed, speech_loop
@@ -348,16 +350,23 @@ impl Soundpost {
             );
         }
 
+        let mut result_type = PlayResultType::Normal;
+
         let duration = speech_loop.duration - 1;
         let max_wait_duration = speech_loop.duration + 1;
         tokio::select! {
-            _ = rx.recv() => {
+            cancel_type = rx.recv() => {
                 info!("Soundpost canceled by rx signal");
                 self.cancel(&device_ids).await;
+                match cancel_type {
+                    Some(cancel_type) => result_type = PlayResultType::Canceled(cancel_type),
+                    None => {}
+                }
             }
             _ = tokio::time::sleep(Duration::from_secs(max_wait_duration)) => {
                 info!("Soundpost playing over {} secs, cancel it", max_wait_duration);
                 self.cancel(&device_ids).await;
+                result_type = PlayResultType::Timeout;
             }
             _ = self.wait_for_play_finished(duration, &device_ids) => {
                 info!("Soundpost play finished");
@@ -365,7 +374,7 @@ impl Soundpost {
         }
 
         debug!("Soundpost playing task finished!");
-        Ok(())
+        Ok(result_type)
     }
 
     async fn wait_for_play_finished(&self, duration: u64, device_ids: &Vec<u32>) {

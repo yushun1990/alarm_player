@@ -1,13 +1,19 @@
 use chrono::Utc;
 use cron::Schedule;
+use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::fs;
 use std::str::FromStr;
+use std::{collections::HashMap, time::Duration};
 use time::OffsetDateTime;
 use tracing::{error, info, warn};
+use tracing_log::log::LevelFilter;
 
-use crate::{config::PlayMode, model::Alarm};
+use crate::{
+    config::DbConfig,
+    model::{Alarm, AlarmsInitResp},
+    player::PlayResultType,
+};
 
 pub enum AlarmStatus {
     Playable,
@@ -49,6 +55,8 @@ pub struct AlarmService {
     pub is_alarm_paused: bool,
     // 报警快照集合，已取消报警直接移除
     pub alarm_set: HashMap<String, Alarm>,
+    // 为匹配的取消报警集合
+    pub unmapped_cancel_set: HashMap<String, Alarm>,
     /// 鸡舍状态
     pub house_set: HashMap<String, House>,
     /// 鸡场语言
@@ -65,6 +73,12 @@ pub struct AlarmService {
     pub soundposts: PostConfig,
     /// 循环播放间隔
     pub play_interval_secs: u64,
+    /// 报警初始化接口地址
+    pub alarms_init_url: String,
+    /// Database conntection config
+    pub dbconfig: DbConfig,
+    /// 数据库连接
+    pub db: Option<DatabaseConnection>,
 }
 
 impl AlarmService {
@@ -73,11 +87,14 @@ impl AlarmService {
         default_language: String,
         test_play_duration: u64,
         play_interval_secs: u64,
+        alarms_init_url: String,
+        dbconfig: DbConfig,
     ) -> Self {
         Self {
             play_delay_secs,
             is_alarm_paused: false,
             alarm_set: HashMap::new(),
+            unmapped_cancel_set: HashMap::new(),
             house_set: HashMap::new(),
             default_language,
             test_play_duration,
@@ -87,9 +104,52 @@ impl AlarmService {
                 volume: 0.5,
             },
             play_interval_secs,
+            alarms_init_url,
+            dbconfig,
             ..Default::default()
         }
     }
+
+    async fn connect_db(&mut self) -> anyhow::Result<()> {
+        let mut opt = ConnectOptions::new(self.dbconfig.connection());
+
+        opt.sqlx_logging(true);
+        opt.set_schema_search_path("public");
+        if let Some(max_conns) = self.dbconfig.max_conns() {
+            opt.max_connections(max_conns);
+        }
+
+        if let Some(min_conns) = self.dbconfig.min_conns() {
+            opt.min_connections(min_conns);
+        }
+
+        if let Some(conn_timeout) = self.dbconfig.conn_timeout_millis() {
+            opt.connect_timeout(Duration::from_millis(conn_timeout));
+        }
+
+        if let Some(idle_timeout) = self.dbconfig.idle_timeout_millis() {
+            opt.idle_timeout(Duration::from_millis(idle_timeout));
+        }
+
+        if let Some(level) = self.dbconfig.logging_level() {
+            opt.sqlx_logging_level(LevelFilter::from_str(level.as_str())?);
+        }
+
+        match Database::connect(opt).await {
+            Ok(conn) => {
+                self.db = Some(conn);
+                Ok(())
+            }
+            Err(e) => {
+                anyhow::bail!(
+                    "Failed connecting to db: {}, err: {}",
+                    self.dbconfig.connection(),
+                    e
+                );
+            }
+        }
+    }
+
     pub fn init_localization_set(&mut self, localization_path: String) {
         if let Ok(entries) = fs::read_dir(localization_path) {
             for entry in entries {
@@ -157,9 +217,32 @@ impl AlarmService {
                     return true;
                 }
 
+                self.unmapped_cancel_set.insert(key, alarm);
+
                 return false;
             }
         }
+    }
+
+    pub async fn init_alarm_set(&mut self) -> anyhow::Result<()> {
+        let resp: AlarmsInitResp = reqwest::get(self.alarms_init_url.clone())
+            .await
+            .inspect_err(|e| error!("Failed for requesting the latest alarms: {e}"))?
+            .json()
+            .await
+            .inspect_err(|e| error!("Failed for deserialize latest alarms response: {e}"))?;
+
+        for item in resp.items {
+            let alarm = item.into();
+            let key = Self::get_alarm_set_key(&alarm);
+            self.alarm_set.insert(key, alarm);
+        }
+
+        for k in self.unmapped_cancel_set.keys() {
+            self.alarm_set.remove(k);
+        }
+
+        Ok(())
     }
 
     pub fn is_ongoing_alarm_exist(&self) -> bool {
@@ -341,6 +424,7 @@ impl AlarmService {
 pub struct PlayResult {
     pub id: String,
     pub has_error: bool,
+    pub result_type: PlayResultType,
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]

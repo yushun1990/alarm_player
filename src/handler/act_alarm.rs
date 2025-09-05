@@ -3,7 +3,7 @@ use time::OffsetDateTime;
 use tokio::sync::mpsc::Sender;
 use tracing::info;
 
-use crate::model::Alarm;
+use crate::{model::Alarm, task::Play};
 
 use super::Handler;
 
@@ -12,14 +12,16 @@ pub struct ActAlarmHandler<H: Handler> {
     topic: &'static str,
     tx: Sender<Alarm>,
     child_handler: Option<H>,
+    play: Play,
 }
 
 impl<H: Handler> ActAlarmHandler<H> {
-    pub fn new(topic: &'static str, tx: Sender<Alarm>) -> Self {
+    pub fn new(topic: &'static str, tx: Sender<Alarm>, play: Play) -> Self {
         Self {
             topic,
             tx,
             child_handler: None,
+            play,
         }
     }
 
@@ -57,6 +59,8 @@ impl<H: Handler> Handler for ActAlarmHandler<H> {
 
         info!("Received alarm: {:?}", alarm);
         self.tx.send(alarm).await.map_err(|e| anyhow::anyhow!(e))?;
+
+        self.play.cancel_test_play().await;
 
         Ok(())
     }
