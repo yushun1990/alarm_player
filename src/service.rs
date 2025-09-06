@@ -1,3 +1,4 @@
+use crate::util::rfc3339_time;
 use chrono::Utc;
 use cron::Schedule;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
@@ -9,11 +10,49 @@ use time::OffsetDateTime;
 use tracing::{error, info, warn};
 use tracing_log::log::LevelFilter;
 
-use crate::{
-    config::DbConfig,
-    model::{Alarm, AlarmsInitResp},
-    player::PlayResultType,
-};
+use crate::{config::DbConfig, model::Alarm, player::PlayResultType};
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlarmsInitResp {
+    pub total_count: u32,
+    pub items: Vec<AlarmInitRespItem>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AlarmInitRespItem {
+    pub farm_id: Option<String>,
+    pub farm_name: Option<String>,
+    pub location: Option<String>,
+    pub house_code: String,
+    #[serde(rename = "TimeStamp", with = "rfc3339_time")]
+    pub alarm_time: OffsetDateTime,
+    pub day_age: Option<u32>,
+    pub target_name: String,
+    pub alarm_item: String,
+    pub alarm_type: String,
+    pub content: String,
+}
+
+impl From<AlarmInitRespItem> for Alarm {
+    fn from(value: AlarmInitRespItem) -> Self {
+        Self {
+            house_code: value.house_code,
+            tenant_id: Default::default(),
+            farm_id: value.farm_id,
+            target_name: value.target_name,
+            alarm_item: value.alarm_item,
+            content: value.content,
+            timestamp: value.alarm_time,
+            received_time: Some(value.alarm_time),
+            alarm_type: value.alarm_type,
+            is_confirmed: false,
+            is_test: false,
+            is_alarm: true,
+            day_age: value.day_age,
+        }
+    }
+}
 
 pub enum AlarmStatus {
     Playable,
@@ -29,7 +68,7 @@ pub struct House {
     pub code: String,
     /// 是否启用
     pub enabled: bool,
-    /// 收否空舍状态
+    /// 是否空舍状态
     pub is_empty_mode: bool,
 }
 
@@ -67,7 +106,7 @@ pub struct AlarmService {
     pub test_play_duration: u64,
     /// 国际化本地配置
     pub localization_set: HashMap<String, Localization>,
-    /// 音柱配置
+    /// 音箱配置
     pub soundbox: BoxConfig,
     /// 音柱配置
     pub soundposts: PostConfig,

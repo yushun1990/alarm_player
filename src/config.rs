@@ -233,7 +233,7 @@ impl Default for AlarmConfig {
                 "http://127.0.0.1/api/IB/alarm-info/current-alarm-info-page-list-with-no-auth"
                     .into(),
             ),
-            default_language: Some("zh_cn".into()),
+            default_language: Some("zh-Hans".into()),
         }
     }
 }
