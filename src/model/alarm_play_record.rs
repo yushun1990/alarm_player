@@ -1,6 +1,6 @@
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, DatabaseConnection, DeriveEntityModel, DeriveRelation,
-    EnumIter,
+    ActiveModelBehavior, ActiveModelTrait, DatabaseConnection, DeriveEntityModel, DerivePrimaryKey,
+    DeriveRelation, EnumIter, PrimaryKeyTrait,
 };
 use time::PrimitiveDateTime;
 

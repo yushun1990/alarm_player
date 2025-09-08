@@ -18,7 +18,7 @@ tracing = "0.1"
 tracing-log = "0.2"
 async-trait = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry", "std", "fmt", "time"]}
-time = { version = "0.3", features = ["serde", "parsing"] }
+time = { version = "0.3", features = ["serde", "parsing", "local-offset"] }
 cron = "0.15"
 bytes = "1.10"
 chrono = "0.4"

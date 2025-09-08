@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use std::{sync::Arc, time::Duration};
-use time::OffsetDateTime;
+use time::{OffsetDateTime, PrimitiveDateTime};
 use tokio::{
     sync::{
         RwLock,
@@ -120,7 +120,16 @@ impl TestAlarm {
                 info!("Next fire time: {:?}", nt);
                 let duration = nt - OffsetDateTime::now_utc();
                 sleep(Duration::from_nanos(duration.whole_nanoseconds() as u64)).await;
-                if let Err(e) = tx.send(Alarm::default()).await {
+                let now = match OffsetDateTime::now_local() {
+                    Ok(local) => local,
+                    Err(e) => {
+                        error!("Can't read local time: {}", e);
+                        OffsetDateTime::now_utc()
+                    }
+                };
+                let mut alarm = Alarm::default();
+                alarm.test_plan_time = Some(PrimitiveDateTime::new(now.date(), now.time()));
+                if let Err(e) = tx.send(alarm).await {
                     error!("Failed send test alarm to real time queue: {e}");
                 }
                 // TODO: mqtt 发送测试结果确认消息

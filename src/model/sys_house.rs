@@ -8,10 +8,10 @@ use sea_orm::{
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: uuid::Uuid,
-    pub house_type: i32,
     pub name: String,
     pub enabled: bool,
     pub house_code: String,
+    pub is_empty: bool,
     pub is_deleted: bool,
 }
 
@@ -20,7 +20,7 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Model>> {
+pub async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Model>> {
     let result = Entity::find()
         .filter(Column::Enabled.eq(true))
         .filter(Column::IsDeleted.eq(false))

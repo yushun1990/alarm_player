@@ -9,12 +9,16 @@ use time::PrimitiveDateTime;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: uuid::Uuid,
+    // 音箱音量
     pub local_volume: Option<i32>,
-    pub speeker_state: Option<i32>,
+    // 音箱启用状态
+    pub speaker_state: Option<i32>,
+    // 报警暂停
     pub sound_column_pause: Option<i32>,
+    // 报警暂停恢复时间
     pub sound_column_start_time: Option<PrimitiveDateTime>,
+    // 报警语言
     pub alarm_content_lang: Option<String>,
-    pub is_empty: bool,
     pub is_deleted: bool,
 }
 
@@ -23,7 +27,7 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-async fn find_one(db: &DatabaseConnection) -> anyhow::Result<Option<Model>> {
+pub async fn find_one(db: &DatabaseConnection) -> anyhow::Result<Option<Model>> {
     let result = Entity::find()
         .filter(Column::IsDeleted.eq(false))
         .one(db)

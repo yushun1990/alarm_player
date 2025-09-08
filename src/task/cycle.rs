@@ -99,6 +99,15 @@ impl Cycle {
 
     pub async fn push(&self, alarm: Alarm) {
         let mut alarms = self.alarms.lock().await;
+        for a in alarms.iter() {
+            if Self::get_alarm_set_key(&alarm) == Self::get_alarm_set_key(&a) {
+                return;
+            }
+        }
         alarms.push_back(alarm);
+    }
+
+    fn get_alarm_set_key(alarm: &Alarm) -> String {
+        format!("{}_{}", alarm.house_code, alarm.target_name)
     }
 }

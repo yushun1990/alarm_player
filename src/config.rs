@@ -215,6 +215,8 @@ pub struct AlarmConfig {
     init_url: Option<String>,
     // 默认语言
     default_language: Option<String>,
+    // 多语言json文件地址
+    localization_path: Option<String>,
 }
 
 impl Default for AlarmConfig {
@@ -234,6 +236,7 @@ impl Default for AlarmConfig {
                     .into(),
             ),
             default_language: Some("zh-Hans".into()),
+            localization_path: Some("./localization".to_string()),
         }
     }
 }
@@ -316,6 +319,14 @@ impl AlarmConfig {
             duration
         } else {
             Self::default().speech_min_duration.unwrap()
+        }
+    }
+
+    pub fn localization_path(&self) -> String {
+        if let Some(lp) = self.localization_path.clone() {
+            lp
+        } else {
+            Self::default().localization_path.unwrap()
         }
     }
 

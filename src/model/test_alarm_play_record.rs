@@ -1,6 +1,6 @@
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, DatabaseConnection, DeriveEntityModel, DeriveRelation,
-    EnumIter,
+    ActiveModelBehavior, ActiveModelTrait, DatabaseConnection, DeriveEntityModel, DerivePrimaryKey,
+    DeriveRelation, EnumIter, PrimaryKeyTrait,
 };
 use time::PrimitiveDateTime;
 
@@ -9,26 +9,24 @@ use time::PrimitiveDateTime;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: uuid::Uuid,
-    pub house_code: String,
-    pub house_name: String,
-    // `音柱报警/音箱报警`
-    pub receiver_name: String,
-    // 录音文件
-    pub receiver_sign: String,
-    pub alarm_time: PrimitiveDateTime,
-    // 固定 `场舍端警报`
-    pub alarm_grade: String,
-    // `!has_error`
-    pub sending_state: bool,
-    // Box/Sound
-    pub alarm_send_to: String,
-    pub source_message: String,
-    // 音柱/音箱未启用
-    pub error_message: String,
+    // 设定开始时间
+    pub plan_time: PrimitiveDateTime,
+    // 实际测试开始时间
+    pub test_time: PrimitiveDateTime,
+    // 1: 音柱音箱 2: 本地电话 3: 邮箱 4: 公众号
+    pub test_type: i32,
+    // 通知对象: 音柱音箱为空， 其他分别对应手机号、邮箱帐号、公众号等
+    pub notify_obj: Option<String>,
+    // 录音文件，仅音柱音箱有
+    pub media_file: Option<String>,
+    // 1: 正常，2: 异常, 3: 未确认 4: 报警中断 5: 程序中断
+    pub test_result: i32,
+    // 测试过程中是否出现异常
+    pub has_error: bool,
+    // 异常信息
+    pub err_message: Option<String>,
+    // 记录创建时间
     pub creation_time: PrimitiveDateTime,
-    pub is_deleted: bool,
-    // 固定 0
-    pub alarm_client: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -36,7 +34,7 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-async fn insert(record: Model, db: &DatabaseConnection) -> anyhow::Result<()> {
+pub async fn insert(record: Model, db: &DatabaseConnection) -> anyhow::Result<()> {
     let record: ActiveModel = record.into();
     record.insert(db).await?;
     Ok(())

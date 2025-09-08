@@ -10,7 +10,8 @@ pub struct Model {
     pub id: uuid::Uuid,
     /// 测试时长，单位 s
     pub duration: Option<i32>,
-    pub crontab: Option<String>,
+    pub cron: Option<String>,
+    pub sup_types: i32,
     pub enabled: bool,
     pub is_deleted: bool,
 }
@@ -20,11 +21,22 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-async fn find_one(db: &DatabaseConnection) -> anyhow::Result<Option<Model>> {
+pub async fn find_one(db: &DatabaseConnection) -> anyhow::Result<Option<Model>> {
     let result = Entity::find()
         .filter(Column::IsDeleted.eq(false))
-        .one(db)
+        .filter(Column::Enabled.eq(true))
+        .all(db)
         .await?;
 
-    Ok(result)
+    if result.is_empty() {
+        return Ok(None);
+    }
+
+    for m in result {
+        if m.sup_types & 0x01 == 1 {
+            return Ok(Some(m));
+        }
+    }
+
+    Ok(None)
 }

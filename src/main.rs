@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use alarm_player::{
-    app,
-    config::Args,
-    service::{AlarmService, PostConfig},
-};
+use alarm_player::{app, config::Args, service::AlarmService};
 use clap::Parser;
 use tokio::sync::RwLock;
 
@@ -22,9 +18,11 @@ async fn main() {
         config.alarm.init_url(),
         dbconfig,
     );
-    alarm_service.set_soundposts(PostConfig {
-        device_ids: vec![1, 2],
-        speed: 50,
-    });
+
+    alarm_service
+        .init(config.alarm.localization_path())
+        .await
+        .unwrap();
+
     app::run(Arc::new(RwLock::new(alarm_service)), config).await;
 }

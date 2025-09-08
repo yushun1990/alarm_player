@@ -19,7 +19,7 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Model>> {
+pub async fn find_all(db: &DatabaseConnection) -> anyhow::Result<Vec<Model>> {
     let result = Entity::find()
         .filter(Column::IsDeleted.eq(false))
         .filter(Column::Enabled.eq(true))

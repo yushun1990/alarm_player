@@ -1,6 +1,7 @@
 use std::{fs::File, sync::Arc};
 
 use rodio::{Decoder, Source};
+use time::{OffsetDateTime, PrimitiveDateTime};
 use tokio::sync::{
     Mutex, RwLock,
     mpsc::{self, Receiver, Sender},
@@ -176,9 +177,19 @@ impl Play {
                 service.get_play_interval_secs()
             };
 
-            if alarm.is_test {
+            let play_test_alarm = async |box_config, posts_config| -> () {
                 // 測試報警，直接播放
                 info!("Play test alarm: {:?}", alarm);
+                let local = match OffsetDateTime::now_local() {
+                    Ok(local) => local,
+                    Err(e) => {
+                        error!("Failed to get local time: {e}");
+                        OffsetDateTime::now_utc()
+                    }
+                };
+                let mut alarm = alarm.clone();
+                alarm.test_time = Some(PrimitiveDateTime::new(local.date(), local.time()));
+
                 let result = self
                     .play_test(
                         box_config,
@@ -192,9 +203,50 @@ impl Play {
                     .await;
 
                 let mut service = self.service.write().await;
-                service.play_record(&alarm, result).await;
-                continue;
-            }
+                service.test_play_record(&alarm, result).await;
+            };
+
+            let play_alarm = async |alarm, box_config, posts_config| -> () {
+                let (content, duration) = {
+                    let service = self.service.read().await;
+                    match self.play_mode {
+                        PlayMode::Music => (
+                            PlayContent::Url(self.alarm_media_url.clone()),
+                            self.alarm_min_duration,
+                        ),
+                        PlayMode::Tts => {
+                            let content = match service.get_alarm_content(&alarm) {
+                                Ok(content) => content,
+                                Err(e) => {
+                                    error!("Can't extract alarm content: {e}, don't play, skip!!!");
+                                    return;
+                                }
+                            };
+                            (PlayContent::Tts(content), self.speech_min_duration)
+                        }
+                    }
+                };
+
+                let result = self
+                    .play_alarm(
+                        box_config,
+                        posts_config,
+                        content,
+                        SpeechLoop {
+                            duration,
+                            times: 1,
+                            gap: 2,
+                        },
+                    )
+                    .await;
+                {
+                    let mut service = self.service.write().await;
+                    service.play_record(&alarm, result).await;
+                }
+                if let Err(e) = alarm_tx.send(alarm).await {
+                    error!("Failed to send alarm to cycle queue: {e}");
+                }
+            };
 
             match alarm_status {
                 AlarmStatus::Canceled => {
@@ -209,48 +261,12 @@ impl Play {
                     continue;
                 }
                 AlarmStatus::Playable => {
+                    if alarm.is_test {
+                        play_test_alarm(box_config.clone(), posts_config.clone()).await;
+                        continue;
+                    }
                     info!("Play alarm: {:?}", alarm);
-                    let (content, duration) = {
-                        let service = self.service.read().await;
-                        match self.play_mode {
-                            PlayMode::Music => (
-                                PlayContent::Url(self.alarm_media_url.clone()),
-                                self.alarm_min_duration,
-                            ),
-                            PlayMode::Tts => {
-                                let content = match service.get_alarm_content(&alarm) {
-                                    Ok(content) => content,
-                                    Err(e) => {
-                                        error!(
-                                            "Can't extract alarm content: {e}, don't play, skip!!!"
-                                        );
-                                        continue;
-                                    }
-                                };
-                                (PlayContent::Tts(content), self.speech_min_duration)
-                            }
-                        }
-                    };
-
-                    let result = self
-                        .play_alarm(
-                            box_config,
-                            posts_config,
-                            content,
-                            SpeechLoop {
-                                duration,
-                                times: 1,
-                                gap: 2,
-                            },
-                        )
-                        .await;
-                    {
-                        let mut service = self.service.write().await;
-                        service.play_record(&alarm, result).await;
-                    }
-                    if let Err(e) = alarm_tx.send(alarm).await {
-                        error!("Failed to send alarm to cycle queue: {e}");
-                    }
+                    play_alarm(alarm, box_config, posts_config).await;
                 }
             }
         }
@@ -302,7 +318,7 @@ impl Play {
         }
 
         let mut has_error = false;
-
+        let mut err_message: Option<String> = None;
         debug!("waitting for playing task to complete...");
         let mut result_type = PlayResultType::Normal;
         while let Some(res) = js.join_next().await {
@@ -312,10 +328,12 @@ impl Play {
                 }
                 Ok(Err(e)) => {
                     error!("Task failed: {e}");
+                    err_message = Some(e.to_string());
                     has_error = true;
                 }
                 Err(e) => {
                     error!("Task failed: {e}");
+                    err_message = Some(e.to_string());
                     has_error = true;
                 }
             }
@@ -335,6 +353,7 @@ impl Play {
         PlayResult {
             id,
             has_error,
+            err_message,
             result_type,
         }
     }
@@ -390,6 +409,7 @@ impl Play {
         }
 
         let mut has_error = false;
+        let mut err_message: Option<String> = None;
         let mut result_type = PlayResultType::Normal;
         debug!("waitting for playing task to complete...");
         while let Some(res) = js.join_next().await {
@@ -399,10 +419,12 @@ impl Play {
                 }
                 Ok(Err(e)) => {
                     error!("Task failed: {e}");
+                    err_message = Some(e.to_string());
                     has_error = true;
                 }
                 Err(e) => {
                     error!("Task failed: {e}");
+                    err_message = Some(e.to_string());
                     has_error = true;
                 }
             }
@@ -418,6 +440,7 @@ impl Play {
         PlayResult {
             id,
             has_error,
+            err_message,
             result_type,
         }
     }

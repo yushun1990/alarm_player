@@ -1,3 +1,7 @@
+use crate::model::{
+    farm_config_info, sound_column_config, sys_house, test_alarm_config, test_alarm_play_record,
+};
+use crate::player::PlayCancelType;
 use crate::util::rfc3339_time;
 use chrono::Utc;
 use cron::Schedule;
@@ -6,7 +10,7 @@ use serde::Deserialize;
 use std::fs;
 use std::str::FromStr;
 use std::{collections::HashMap, time::Duration};
-use time::OffsetDateTime;
+use time::{OffsetDateTime, PrimitiveDateTime};
 use tracing::{error, info, warn};
 use tracing_log::log::LevelFilter;
 
@@ -20,12 +24,13 @@ pub struct AlarmsInitResp {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AlarmInitRespItem {
     pub farm_id: Option<String>,
     pub farm_name: Option<String>,
     pub location: Option<String>,
     pub house_code: String,
-    #[serde(rename = "TimeStamp", with = "rfc3339_time")]
+    #[serde(with = "rfc3339_time")]
     pub alarm_time: OffsetDateTime,
     pub day_age: Option<u32>,
     pub target_name: String,
@@ -50,6 +55,8 @@ impl From<AlarmInitRespItem> for Alarm {
             is_test: false,
             is_alarm: true,
             day_age: value.day_age,
+            test_plan_time: None,
+            test_time: None,
         }
     }
 }
@@ -72,10 +79,21 @@ pub struct House {
     pub is_empty_mode: bool,
 }
 
+impl From<sys_house::Model> for House {
+    fn from(value: sys_house::Model) -> Self {
+        Self {
+            name: value.name,
+            code: value.house_code,
+            enabled: value.enabled,
+            is_empty_mode: value.is_empty,
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct BoxConfig {
     pub enabled: bool,
-    pub volume: f32,
+    pub volume: u32,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -140,13 +158,74 @@ impl AlarmService {
             localization_set: HashMap::new(),
             soundbox: BoxConfig {
                 enabled: true,
-                volume: 0.5,
+                volume: 100,
             },
             play_interval_secs,
             alarms_init_url,
             dbconfig,
             ..Default::default()
         }
+    }
+
+    pub async fn init(&mut self, localization_path: String) -> anyhow::Result<()> {
+        self.init_localization_set(localization_path);
+        self.connect_db().await?;
+
+        if let Some(db) = self.db.clone() {
+            self.init_house_set(&db).await?;
+            if let Some(farm) = farm_config_info::find_one(&db).await? {
+                self.is_alarm_paused = match farm.sound_column_pause {
+                    Some(pause) => pause == 1,
+                    None => false,
+                };
+                self.language = farm.alarm_content_lang;
+                self.soundbox = BoxConfig {
+                    enabled: match farm.speaker_state {
+                        Some(state) => state == 1,
+                        None => false,
+                    },
+                    volume: match farm.local_volume {
+                        Some(volume) => volume as u32,
+                        None => 50,
+                    },
+                }
+            }
+
+            self.soundposts = PostConfig {
+                device_ids: Vec::new(),
+                speed: 50,
+            };
+
+            let sc_list = sound_column_config::find_all(&db).await?;
+            for sc in sc_list {
+                if !sc.enabled {
+                    continue;
+                }
+                self.soundposts.device_ids.push(sc.device_id as u32);
+                self.soundposts.speed = sc.speed as u8;
+            }
+
+            let tac = test_alarm_config::find_one(&db).await?;
+            if let Some(tac) = tac {
+                if let Some(duration) = tac.duration {
+                    self.test_play_duration = duration as u64;
+                }
+                self.crontab = tac.cron;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn init_house_set(&mut self, db: &DatabaseConnection) -> anyhow::Result<()> {
+        let models = sys_house::find_all(db).await?;
+        for model in models {
+            let house: House = model.into();
+            let code = house.clone().code;
+            self.house_set.insert(code, house);
+        }
+
+        Ok(())
     }
 
     async fn connect_db(&mut self) -> anyhow::Result<()> {
@@ -189,7 +268,7 @@ impl AlarmService {
         }
     }
 
-    pub fn init_localization_set(&mut self, localization_path: String) {
+    fn init_localization_set(&mut self, localization_path: String) {
         if let Ok(entries) = fs::read_dir(localization_path) {
             for entry in entries {
                 if let Ok(entry) = entry {
@@ -458,11 +537,60 @@ impl AlarmService {
             result.id, result.has_error, alarm
         );
     }
+
+    pub async fn test_play_record(&mut self, alarm: &Alarm, result: PlayResult) {
+        let uuid = uuid::Uuid::new_v4();
+        let now = match OffsetDateTime::now_local() {
+            Ok(local) => local,
+            Err(e) => {
+                error!("Failed for getting local time: {e}");
+                OffsetDateTime::now_utc()
+            }
+        };
+
+        let ct = PrimitiveDateTime::new(now.date(), now.time());
+
+        let plan_time = match alarm.test_plan_time {
+            Some(t) => t,
+            None => ct.clone(),
+        };
+        let test_time = match alarm.test_time {
+            Some(t) => t,
+            None => ct.clone(),
+        };
+        let model = test_alarm_play_record::Model {
+            id: uuid,
+            plan_time,
+            test_time,
+            test_type: 1,
+            notify_obj: None,
+            media_file: Some(result.id),
+            test_result: match result.result_type {
+                PlayResultType::Normal | PlayResultType::Timeout => 1,
+                PlayResultType::Canceled(ct) => match ct {
+                    PlayCancelType::AlarmArrived => 4,
+                    PlayCancelType::Terminated => 5,
+                },
+            },
+            has_error: result.has_error,
+            err_message: result.err_message,
+            creation_time: ct,
+        };
+
+        if let Some(db) = self.db.clone() {
+            if let Err(e) = test_alarm_play_record::insert(model, &db).await {
+                error!("Failed for insertting test alarm: {e}");
+            }
+        } else {
+            error!("Database is not connected!")
+        }
+    }
 }
 
 pub struct PlayResult {
     pub id: String,
     pub has_error: bool,
+    pub err_message: Option<String>,
     pub result_type: PlayResultType,
 }
 
@@ -470,4 +598,26 @@ pub struct PlayResult {
 pub struct Localization {
     pub culture: String,
     pub texts: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod service_tests {
+    use tracing::info;
+
+    use crate::service::AlarmsInitResp;
+
+    #[tokio::test]
+    async fn test_desc() {
+        let body = reqwest::get(
+            "http://192.168.77.34/api/IB/alarm-info/current-alarm-info-page-list-with-no-auth",
+        )
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+        let result: AlarmsInitResp = serde_json::from_str(body.as_str()).unwrap();
+        info!("result: {:?}", result);
+    }
 }

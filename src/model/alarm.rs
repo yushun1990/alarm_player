@@ -1,6 +1,6 @@
 use crate::util::rfc3339_time;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use time::{OffsetDateTime, PrimitiveDateTime};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -27,17 +27,21 @@ pub struct Alarm {
     #[serde(default)]
     pub is_confirmed: bool,
     pub day_age: Option<u32>,
+    // 测试报警计划执行时间
+    pub test_plan_time: Option<PrimitiveDateTime>,
+    // 测试报警实际执行时间
+    pub test_time: Option<PrimitiveDateTime>,
 }
 
 impl Default for Alarm {
     fn default() -> Self {
         Self {
-            house_code: Default::default(),
+            house_code: "test".to_string(),
             tenant_id: Default::default(),
             farm_id: Default::default(),
-            target_name: Default::default(),
-            alarm_item: Default::default(),
-            content: "测试报警".into(),
+            target_name: "test".to_string(),
+            alarm_item: "test".to_string(),
+            content: "test".to_string(),
             timestamp: OffsetDateTime::now_utc(),
             received_time: Some(OffsetDateTime::now_utc()),
             alarm_type: "test".to_string(),
@@ -45,6 +49,8 @@ impl Default for Alarm {
             is_test: true,
             is_alarm: true,
             day_age: Default::default(),
+            test_plan_time: Default::default(),
+            test_time: Default::default(),
         }
     }
 }
