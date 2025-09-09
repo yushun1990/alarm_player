@@ -26,7 +26,7 @@ impl Default for DbConfig {
     fn default() -> Self {
         Self {
             connection: Some(
-                "postgres://postgres:BHzpdmYyyAV1*GHm@127.0.0.1:5432/AwingIB2?currentSchema=public"
+                "postgres://postgres:BHzpdmYyyAV1*GHm@127.0.0.1:5432/AwingIBV2?currentSchema=public"
                     .into(),
             ),
             max_conns: Default::default(),
@@ -209,8 +209,6 @@ pub struct AlarmConfig {
     alarm_min_duration: Option<u64>,
     // 语音最小播放时长
     speech_min_duration: Option<u64>,
-    // 报警测试调度为空时检测周期
-    empty_schedule_secs: Option<u64>,
     // 报警初始化接口地址
     init_url: Option<String>,
     // 默认语言
@@ -230,7 +228,6 @@ impl Default for AlarmConfig {
             test_min_duration: Some(30),
             alarm_min_duration: Some(15),
             speech_min_duration: Some(10),
-            empty_schedule_secs: Some(5),
             init_url: Some(
                 "http://127.0.0.1/api/IB/alarm-info/current-alarm-info-page-list-with-no-auth"
                     .into(),
@@ -279,14 +276,6 @@ impl AlarmConfig {
             default_test_play_duration
         } else {
             Self::default().default_test_play_duration.unwrap()
-        }
-    }
-
-    pub fn empty_schedule_secs(&self) -> u64 {
-        if let Some(empty_schedule_secs) = self.empty_schedule_secs {
-            empty_schedule_secs
-        } else {
-            Self::default().empty_schedule_secs.unwrap()
         }
     }
 
@@ -473,6 +462,8 @@ pub struct SoundpostConfig {
     alarm_media_url: Option<String>,
     test_media_url: Option<String>,
     play_mode: Option<PlayMode>,
+    ws_username: Option<String>,
+    ws_password: Option<String>,
 }
 
 impl Default for SoundpostConfig {
@@ -482,6 +473,8 @@ impl Default for SoundpostConfig {
             api_login_token: Some("YWRtaW46YWRtaW5fYXBpX2tleQ==".into()),
             alarm_media_url: Some("http://host.docker.internal:80/NewAlarm.wav".into()),
             test_media_url: Some("http://host.docker.internal:80/TestAlarm.wav".into()),
+            ws_username: Some("admin".to_string()),
+            ws_password: Some("123456".to_string()),
             play_mode: Some(PlayMode::Tts),
         }
     }
@@ -525,6 +518,22 @@ impl SoundpostConfig {
             play_mode
         } else {
             Self::default().play_mode.unwrap()
+        }
+    }
+
+    pub fn ws_username(&self) -> String {
+        if let Some(username) = self.ws_username.clone() {
+            username
+        } else {
+            Self::default().ws_username.unwrap()
+        }
+    }
+
+    pub fn ws_password(&self) -> String {
+        if let Some(password) = self.ws_password.clone() {
+            password
+        } else {
+            Self::default().ws_password.unwrap()
         }
     }
 }

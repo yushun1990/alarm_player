@@ -10,7 +10,7 @@ async fn main() {
 
     let config = alarm_player::config::Config::new(args.config.as_str()).unwrap();
     let dbconfig = config.database.clone();
-    let mut alarm_service = AlarmService::new(
+    let alarm_service = AlarmService::new(
         config.alarm.play_delay_secs(),
         config.alarm.default_langauge(),
         config.alarm.default_test_play_duration(),
@@ -18,11 +18,6 @@ async fn main() {
         config.alarm.init_url(),
         dbconfig,
     );
-
-    alarm_service
-        .init(config.alarm.localization_path())
-        .await
-        .unwrap();
 
     app::run(Arc::new(RwLock::new(alarm_service)), config).await;
 }

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use mimalloc::MiMalloc;
 use tokio::{
     signal::{
         self,
@@ -11,27 +10,37 @@ use tokio::{
 use tracing::{error, info};
 
 use crate::{
-    handler::{ActAlarmHandler, DefaultHandler, TestAlarm, TestAlarmHandler},
-    model::Alarm,
+    handler::{
+        ActAlarmHandler, AlarmConfirmHandler, DefaultHandler, FarmConfigHandler, HouseSetHandler,
+        SoundpostsHandler, TestAlarm, TestAlarmHandler,
+    },
+    model::{Alarm, TestAlarmConfig},
     mqtt_client::MqttClient,
     player::Soundpost,
     recorder::Recorder,
     service::AlarmService,
-    task::{Cycle, Play, RealTime},
+    task::{Cycle, Play, RealTime, WsClient},
 };
-
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
 
 pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Config) {
     tracing_subscriber::fmt()
         .with_env_filter(config.tracing.level())
         .init();
 
+    let (client, eventloop) = MqttClient::new(config.mqtt);
+    {
+        let mut service = service.write().await;
+        service
+            .init(config.alarm.localization_path())
+            .await
+            .unwrap();
+        service.set_mqtt_client(client.clone());
+    }
+
     let (real_time_tx, real_time_rx) = channel::<Alarm>(config.queue.real_time_size());
     let (cycle_tx, cycle_rx) = channel::<Alarm>(config.queue.cycle_size());
     let (player_tx, player_rx) = channel::<Alarm>(config.queue.player_size());
-    let (ct_tx, ct_rx) = channel::<String>(10);
+    let (ct_tx, ct_rx) = channel::<TestAlarmConfig>(10);
 
     let alarm_media_path = config.soundbox.alarm_media_path();
     let test_media_path = config.soundbox.test_media_path();
@@ -72,15 +81,7 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
 
     let shutdown = Arc::new(Notify::new());
     let sd = shutdown.clone();
-    let cycle_service = service.clone();
     let alarm_tx = player_tx.clone();
-    let cycle_interval_secs = config.alarm.cycle_interval_secs();
-    let cycle_handle = tokio::spawn(async move {
-        Cycle::init(cycle_interval_secs, cycle_service)
-            .await
-            .run(alarm_tx, cycle_rx, sd)
-            .await;
-    });
     let real_time_service = service.clone();
     let asc_interval_secs = config.alarm.asc_interval_secs();
     let mut realtime = RealTime::new(asc_interval_secs, real_time_service);
@@ -88,31 +89,49 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
         realtime.run(player_tx, real_time_rx).await;
     });
 
+    // ============================= MQTT 消息处理规则链 ===================================
     let handler = DefaultHandler::default();
+    // 鸡场更新消息
+    type FH = FarmConfigHandler<DefaultHandler>;
+    let play_clone = play.clone();
+    let service_clone = service.clone();
+    let handler = FH::new(play_clone, service_clone).handler(handler);
 
-    type TAH = TestAlarmHandler<DefaultHandler>;
-    let handler = TAH::new("crontab", ct_tx).handler(handler);
+    // 鸡舍更新消息
+    type HSH = HouseSetHandler<FH>;
+    let service_clone = service.clone();
+    let handler = HSH::new(service_clone).handler(handler);
 
+    // 音柱配置更新
+    type SPH = SoundpostsHandler<HSH>;
+    let service_clone = service.clone();
+    let handler = SPH::new(service_clone).handler(handler);
+
+    // 报警确认更新
+    type ACH = AlarmConfirmHandler<SPH>;
+    let service_clone = service.clone();
+    let handler = ACH::new(service_clone).handler(handler);
+
+    // 测试报警配置
+    type TAH = TestAlarmHandler<ACH>;
+    let handler = TAH::new(ct_tx).handler(handler);
+
+    // 真实报警消息
     type AAH = ActAlarmHandler<TAH>;
     let play_clone = play.clone();
-    let handler = AAH::new("repub_alarms", real_time_tx.clone(), play_clone).handler(handler);
-    let play_clone = play.clone();
-    let handler =
-        ActAlarmHandler::<AAH>::new("alarm", real_time_tx.clone(), play_clone).handler(handler);
+    let handler = AAH::new(real_time_tx.clone(), play_clone).handler(handler);
+    // =========================================================================
 
-    let (client, eventloop) = MqttClient::new(config.mqtt);
-    let mqtt_client = client.clone();
-    let empty_schedule_secs = config.alarm.empty_schedule_secs();
     let test_alarm_service = service.clone();
-    let mut test_alarm = TestAlarm::new(empty_schedule_secs, mqtt_client, test_alarm_service);
+    let mut test_alarm = TestAlarm::new(test_alarm_service);
     let test_alarm_handle = tokio::spawn(async move {
         test_alarm.run(real_time_tx, ct_rx).await;
     });
 
     let topics: Vec<String> = vec![
-        "$share/ap/+/+/alarm".to_string(),
-        "$share/ap/+/+/repub_alarms".to_string(),
-        "ap/test_alarm/crontab".to_string(),
+        crate::TOPIC_ALARM.to_string(),
+        crate::TOPIC_REPUB_ALARM.to_string(),
+        crate::TOPIC_CRONTAB.to_string(),
     ];
 
     let mqtt_shutdown = shutdown.clone();
@@ -134,6 +153,28 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
         }
     }
 
+    let cycle_service = service.clone();
+    let cycle_interval_secs = config.alarm.cycle_interval_secs();
+    let cycle_handle = tokio::spawn(async move {
+        Cycle::init(cycle_interval_secs, cycle_service)
+            .await
+            .run(alarm_tx, cycle_rx, sd)
+            .await;
+    });
+
+    let ws = WsClient::new(
+        config.soundpost.api_host(),
+        config.soundpost.ws_username(),
+        config.soundpost.ws_password(),
+        service,
+    )
+    .await
+    .unwrap();
+    let st = shutdown.clone();
+    let ws_handle = tokio::spawn(async move {
+        ws.subscribe(st).await;
+    });
+
     #[cfg(unix)]
     let mut term_signal = signal(SignalKind::terminate()).unwrap();
 
@@ -149,7 +190,8 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
         mqtt_subscribe_handle,
         real_time_handle,
         cycle_handle,
-        test_alarm_handle
+        test_alarm_handle,
+        ws_handle
     );
 
     info!("Notify player to cancel playing...");

@@ -3,9 +3,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::StatusCode;
 use serde::Deserialize;
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, sync::RwLock};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+
+use crate::{TOPIC_SOUNDPOST_STATUS, service::AlarmService};
 
 #[derive(Clone, Deserialize)]
 pub struct LoginResult {
@@ -22,15 +24,26 @@ pub struct LoginResponse {
 pub struct WsClient {
     pub api_host: String,
     pub token: String,
+    pub service: Arc<RwLock<AlarmService>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Event {
+    pub event: String,
 }
 
 #[allow(unreachable_code)]
 impl WsClient {
-    pub async fn new(api_host: String) -> anyhow::Result<Self> {
+    pub async fn new(
+        api_host: String,
+        username: String,
+        password: String,
+        service: Arc<RwLock<AlarmService>>,
+    ) -> anyhow::Result<Self> {
         let client = reqwest::Client::new();
         let mut request_data = HashMap::new();
-        request_data.insert("username", "admin");
-        request_data.insert("password", "123456");
+        request_data.insert("username", username.as_str());
+        request_data.insert("password", password.as_str());
         let result: LoginResponse = client
             .post(format!("http://{}/v1/login", api_host))
             .json(&request_data)
@@ -45,7 +58,11 @@ impl WsClient {
 
         let token = result.value.unwrap().token;
 
-        Ok(Self { api_host, token })
+        Ok(Self {
+            api_host,
+            token,
+            service,
+        })
     }
 
     pub async fn subscribe(&self, shutdown: Arc<tokio::sync::Notify>) {
@@ -57,7 +74,7 @@ impl WsClient {
         }
     }
 
-    pub async fn reconnect(
+    async fn reconnect(
         &self,
         mut stream: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     ) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
@@ -94,7 +111,7 @@ impl WsClient {
         }
     }
 
-    pub async fn listen(&self) {
+    async fn listen(&self) {
         let send_timeout = Duration::from_secs(1);
         let mut stream = self.reconnect(None).await;
         info!("Connected to websocket server...");
@@ -104,13 +121,24 @@ impl WsClient {
                 Ok(Some(Ok(msg))) => match msg {
                     Message::Text(text) => {
                         info!("Received websocket msg: {}", text);
+                        let event = match serde_json::from_str::<Event>(&text) {
+                            Ok(event) => event,
+                            Err(e) => {
+                                error!("Failed for deserialize ws message: {e}");
+                                continue;
+                            }
+                        };
+                        if event.event == "onlineStatus" {
+                            let mut service = self.service.write().await;
+                            service.publish(TOPIC_SOUNDPOST_STATUS, text).await;
+                        }
                     }
                     Message::Ping(data) => {
-                        info!("Received ping");
+                        debug!("Received ping");
                         match tokio::time::timeout(send_timeout, stream.send(Message::Pong(data)))
                             .await
                         {
-                            Ok(Ok(_)) => info!("Sent pong"),
+                            Ok(Ok(_)) => debug!("Sent pong"),
                             Ok(Err(e)) => {
                                 error!("Failed to send pong: {e}, reconnect...");
                                 stream = self.reconnect(Some(stream)).await;
@@ -122,7 +150,7 @@ impl WsClient {
                         }
                     }
                     Message::Pong(_) => {
-                        info!("Received pong");
+                        debug!("Received pong");
                     }
                     Message::Close(_) => {
                         info!("Received close frame, reconnect...");
@@ -149,17 +177,22 @@ impl WsClient {
 
 #[cfg(test)]
 mod ws_tests {
-    use crate::task::ws::WsClient;
+    use std::sync::Arc;
 
-    #[test]
-    fn test() {
-        tracing_subscriber::fmt().with_env_filter("info").init();
-    }
+    use tokio::sync::RwLock;
+
+    use crate::{service::AlarmService, task::ws::WsClient};
+
     #[tokio::test]
     async fn test_ws() {
-        let ws_client = WsClient::new("192.168.77.14:8080".to_string())
-            .await
-            .unwrap();
+        let ws_client = WsClient::new(
+            "192.168.77.14:8080".to_string(),
+            "admin".to_string(),
+            "123456".to_string(),
+            Arc::new(RwLock::new(AlarmService::default())),
+        )
+        .await
+        .unwrap();
         ws_client.listen().await;
     }
 }

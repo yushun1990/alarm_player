@@ -36,8 +36,11 @@ impl RealTime {
                 Err(TryRecvError::Empty) => None,
                 Err(TryRecvError::Disconnected) => {
                     if let Some(handler) = &self.sleep_task_handle {
+                        info!("Cancel sleep handle...");
                         handler.abort();
                     }
+
+                    info!("Real time channel closed, exit...");
                     return;
                 }
             };

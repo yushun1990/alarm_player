@@ -10,15 +10,17 @@ use super::Handler;
 #[derive(Clone)]
 pub struct ActAlarmHandler<H: Handler> {
     topic: &'static str,
+    repub_topic: &'static str,
     tx: Sender<Alarm>,
     child_handler: Option<H>,
     play: Play,
 }
 
 impl<H: Handler> ActAlarmHandler<H> {
-    pub fn new(topic: &'static str, tx: Sender<Alarm>, play: Play) -> Self {
+    pub fn new(tx: Sender<Alarm>, play: Play) -> Self {
         Self {
-            topic,
+            topic: "alarm",
+            repub_topic: "repub_alarms",
             tx,
             child_handler: None,
             play,
@@ -31,7 +33,7 @@ impl<H: Handler> ActAlarmHandler<H> {
     }
 
     fn mat(&self, topic: &str) -> bool {
-        return topic.ends_with(self.topic);
+        return topic.ends_with(self.topic) || topic.ends_with(self.repub_topic);
     }
 
     fn deserialize(&self, data: Bytes) -> anyhow::Result<Alarm> {

@@ -1,17 +1,20 @@
+use crate::TOPIC_RESULT_CRONTAB;
 use crate::model::{
-    farm_config_info, sound_column_config, sys_house, test_alarm_config, test_alarm_play_record,
+    TestAlarmConfig, alarm_play_record, farm_config_info, sound_column_config, sys_house,
+    test_alarm_config, test_alarm_play_record,
 };
+use crate::mqtt_client::MqttClient;
 use crate::player::PlayCancelType;
 use crate::util::rfc3339_time;
 use chrono::Utc;
 use cron::Schedule;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::str::FromStr;
 use std::{collections::HashMap, time::Duration};
 use time::{OffsetDateTime, PrimitiveDateTime};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_log::log::LevelFilter;
 
 use crate::{config::DbConfig, model::Alarm, player::PlayResultType};
@@ -57,6 +60,7 @@ impl From<AlarmInitRespItem> for Alarm {
             day_age: value.day_age,
             test_plan_time: None,
             test_time: None,
+            is_new: false,
         }
     }
 }
@@ -67,7 +71,8 @@ pub enum AlarmStatus {
     Paused,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct House {
     /// 舍号/鸡舍名称
     pub name: String,
@@ -136,6 +141,8 @@ pub struct AlarmService {
     pub dbconfig: DbConfig,
     /// 数据库连接
     pub db: Option<DatabaseConnection>,
+    /// Mqtt客户端
+    pub client: Option<MqttClient>,
 }
 
 impl AlarmService {
@@ -171,6 +178,7 @@ impl AlarmService {
         self.init_localization_set(localization_path);
         self.connect_db().await?;
 
+        debug!("Init service by db...");
         if let Some(db) = self.db.clone() {
             self.init_house_set(&db).await?;
             if let Some(farm) = farm_config_info::find_one(&db).await? {
@@ -217,11 +225,23 @@ impl AlarmService {
         Ok(())
     }
 
+    pub fn set_mqtt_client(&mut self, client: MqttClient) {
+        self.client = Some(client);
+    }
+
+    pub async fn publish(&mut self, topic: &'static str, payload: String) {
+        if let Some(client) = self.client.as_mut() {
+            client.publish(topic, payload).await;
+        }
+    }
+
     async fn init_house_set(&mut self, db: &DatabaseConnection) -> anyhow::Result<()> {
         let models = sys_house::find_all(db).await?;
+        debug!("Got houses from db: {:?}", models);
         for model in models {
             let house: House = model.into();
             let code = house.clone().code;
+            debug!("Add house, code: {code}, house: {:?}", house);
             self.house_set.insert(code, house);
         }
 
@@ -301,7 +321,25 @@ impl AlarmService {
         format!("{}_{}", alarm.house_code, alarm.target_name)
     }
 
+    pub fn set_houses(&mut self, houses: Vec<House>) {
+        self.house_set.clear();
+        for house in houses {
+            let code = house.code.clone();
+            self.house_set.insert(code, house);
+        }
+    }
+
+    pub fn confirm_alarms(&mut self, alarms: Vec<Alarm>) {
+        for alarm in alarms {
+            let key = Self::get_alarm_set_key(&alarm);
+            if let Some(a) = self.alarm_set.get_mut(&key) {
+                a.is_confirmed = alarm.is_confirmed;
+            }
+        }
+    }
+
     pub fn set_house_status(&mut self, house_code: String, enabled: bool, is_empty_mode: bool) {
+        debug!("house_code: {house_code}; enabled: {enabled}; is_empty_mode: {is_empty_mode}");
         if let Some(house) = self.house_set.get_mut(&house_code) {
             house.enabled = enabled;
             house.is_empty_mode = is_empty_mode
@@ -326,8 +364,9 @@ impl AlarmService {
                 if !alarm.is_alarm {
                     // 消警，删除报警缓存
                     self.alarm_set.remove(&key);
+                    return false;
                 }
-                return false;
+                return false || alarm.is_new;
             }
             None => {
                 if alarm.is_alarm {
@@ -374,16 +413,15 @@ impl AlarmService {
             return AlarmStatus::Canceled;
         }
 
-        // 报警暂停
-        if self.is_alarm_paused {
-            return AlarmStatus::Paused;
-        }
-
         // 空舍
         let paused = match self.house_set.get(&alarm.house_code) {
-            Some(house) => !house.is_empty_mode && house.enabled,
+            Some(house) => house.is_empty_mode && !house.enabled,
             None => false,
         };
+        debug!(
+            "is_alarm_paused: {}, is_confirmed: {}, paused: {}",
+            self.is_alarm_paused, alarm.is_confirmed, paused
+        );
         if self.is_alarm_paused || alarm.is_confirmed || paused {
             return AlarmStatus::Paused;
         }
@@ -419,8 +457,17 @@ impl AlarmService {
         }
     }
 
-    pub fn set_crontab(&mut self, ct: String) {
-        self.crontab = Some(ct);
+    pub fn get_crontab(&self) -> Option<String> {
+        self.crontab.clone()
+    }
+
+    pub fn set_alarm_pause(&mut self, pause: bool) {
+        self.is_alarm_paused = pause;
+    }
+
+    pub fn test_alarm_config(&mut self, config: TestAlarmConfig) {
+        self.test_play_duration = config.duration;
+        self.crontab = config.crontab;
     }
 
     pub fn get_play_delay(&self) -> time::Duration {
@@ -536,6 +583,50 @@ impl AlarmService {
             "Add play record, id: {}, has_error: {}, alarm: {:?}",
             result.id, result.has_error, alarm
         );
+
+        let now = match OffsetDateTime::now_local() {
+            Ok(local) => local,
+            Err(e) => {
+                error!("Failed for getting local time: {e}");
+                OffsetDateTime::now_utc()
+            }
+        };
+
+        if result.play_type.is_none() {
+            warn!("Neither box or column enabled, don't play!");
+        }
+
+        let uuid = uuid::Uuid::new_v4();
+
+        let house_name = match self.house_set.get(&alarm.house_code) {
+            Some(house) => Some(house.name.clone()),
+            None => None,
+        };
+
+        let model = alarm_play_record::Model {
+            id: uuid,
+            house_code: alarm.house_code.clone(),
+            house_name,
+            receiver_name: result.play_type.unwrap(),
+            receiver_sign: result.id,
+            alarm_time: PrimitiveDateTime::new(alarm.timestamp.date(), alarm.timestamp.time()),
+            alarm_grade: "场舍端报警".to_string(),
+            sending_state: !result.has_error,
+            alarm_send_to: "Box/Sound".to_string(),
+            source_message: serde_json::to_string(alarm).unwrap(),
+            error_message: result.err_message,
+            creation_time: PrimitiveDateTime::new(now.date(), now.time()),
+            is_deleted: false,
+            alarm_client: 0,
+        };
+
+        if let Some(db) = self.db.clone() {
+            if let Err(e) = alarm_play_record::insert(model, &db).await {
+                error!("Failed for insertting test alarm: {e}");
+            }
+        } else {
+            error!("Database is not connected!")
+        }
     }
 
     pub async fn test_play_record(&mut self, alarm: &Alarm, result: PlayResult) {
@@ -558,20 +649,21 @@ impl AlarmService {
             Some(t) => t,
             None => ct.clone(),
         };
+
+        let test_result = match result.result_type {
+            PlayResultType::Normal | PlayResultType::Timeout => 3,
+            PlayResultType::Canceled(PlayCancelType::AlarmArrived) => 4,
+            PlayResultType::Canceled(PlayCancelType::Terminated) => 5,
+        };
+
         let model = test_alarm_play_record::Model {
             id: uuid,
-            plan_time,
-            test_time,
+            plan_time: plan_time.clone(),
+            test_time: test_time.clone(),
             test_type: 1,
             notify_obj: None,
             media_file: Some(result.id),
-            test_result: match result.result_type {
-                PlayResultType::Normal | PlayResultType::Timeout => 1,
-                PlayResultType::Canceled(ct) => match ct {
-                    PlayCancelType::AlarmArrived => 4,
-                    PlayCancelType::Terminated => 5,
-                },
-            },
+            test_result: test_result.clone(),
             has_error: result.has_error,
             err_message: result.err_message,
             creation_time: ct,
@@ -584,13 +676,51 @@ impl AlarmService {
         } else {
             error!("Database is not connected!")
         }
+
+        let resp = MqttPlayResp {
+            code: 0,
+            message: "Success".to_string(),
+            data: Some(MqttPlayRespData {
+                result: test_result,
+                plan_time,
+                test_time,
+            }),
+        };
+
+        match serde_json::to_string(&resp) {
+            Ok(data) => {
+                self.publish(TOPIC_RESULT_CRONTAB, data).await;
+            }
+            Err(e) => {
+                error!("MqttPlayResp serialize failed: {e}");
+            }
+        }
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MqttPlayResp {
+    ///
+    /// 0: 正常 1: 错误
+    pub code: i32,
+    pub message: String,
+    pub data: Option<MqttPlayRespData>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MqttPlayRespData {
+    pub result: i32,
+    pub plan_time: PrimitiveDateTime,
+    pub test_time: PrimitiveDateTime,
 }
 
 pub struct PlayResult {
     pub id: String,
     pub has_error: bool,
     pub err_message: Option<String>,
+    pub play_type: Option<String>,
     pub result_type: PlayResultType,
 }
 

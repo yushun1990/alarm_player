@@ -8,3 +8,4 @@ mod real_time;
 pub use real_time::RealTime;
 
 mod ws;
+pub use ws::WsClient;

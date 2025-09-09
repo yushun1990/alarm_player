@@ -31,6 +31,10 @@ pub struct Alarm {
     pub test_plan_time: Option<PrimitiveDateTime>,
     // 测试报警实际执行时间
     pub test_time: Option<PrimitiveDateTime>,
+    // 是否新报警， 默认false， 指定为true 时 不管是否
+    // 收到过相同类型的报警都会认为是新报警
+    #[serde(skip)]
+    pub is_new: bool,
 }
 
 impl Default for Alarm {
@@ -51,6 +55,7 @@ impl Default for Alarm {
             day_age: Default::default(),
             test_plan_time: Default::default(),
             test_time: Default::default(),
+            is_new: false,
         }
     }
 }

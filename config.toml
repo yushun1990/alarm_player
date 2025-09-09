@@ -1,5 +1,5 @@
 [tracing]
-level = "debug"
+level = "info"
 
 [mqtt]
 broker="192.168.77.34"
@@ -13,7 +13,7 @@ record_link_path = "/tmp"
 [queue]
 real_time_size = 10
 player_size = 1
-cycle_size = 10
+cycle_size = 100
 
 [soundbox]
 test_media_path = "/home/yushun/Project/alarm_player/resource/please-calm-my-mind-125566.wav"
@@ -34,4 +34,5 @@ localization_path="./resource/localization"
 init_url="http://192.168.77.34/api/IB/alarm-info/current-alarm-info-page-list-with-no-auth"
 
 [database]
-connection="postgres://postgres:BHzpdmYyyAV1*GHm@192.168.77.34:5432/AwingIBV2?currentSchema=public"
+connection="postgres://postgres:BHzpdmYyyAV1*GHm@192.168.77.34:5432/AwingIBV2"
+logging_level = "debug"

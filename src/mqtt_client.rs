@@ -23,6 +23,19 @@ impl MqttClient {
         (Self { client }, eventloop)
     }
 
+    pub async fn publish(&mut self, topic: &'static str, payload: String) {
+        if let Err(e) = self
+            .client
+            .publish(topic, QoS::AtLeastOnce, false, payload.clone())
+            .await
+        {
+            error!(
+                "Failed for publish {} to topic: {}, err: {e}",
+                payload, topic
+            );
+        }
+    }
+
     pub async fn subscribe<H: Handler>(
         &self,
         mut eventloop: EventLoop,

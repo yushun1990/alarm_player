@@ -10,21 +10,25 @@ use tokio::{
 };
 use tracing::{error, info};
 
-use crate::{model::Alarm, mqtt_client::MqttClient, service::AlarmService};
+use crate::{
+    TOPIC_RESULT_CRONTAB,
+    model::{Alarm, TestAlarmConfig},
+    service::AlarmService,
+};
 
 use super::Handler;
 
 #[derive(Clone)]
 pub struct TestAlarmHandler<H: Handler> {
     topic: &'static str,
-    tx: Sender<String>,
+    tx: Sender<TestAlarmConfig>,
     child_handler: Option<H>,
 }
 
 impl<H: Handler> TestAlarmHandler<H> {
-    pub fn new(topic: &'static str, tx: Sender<String>) -> Self {
+    pub fn new(tx: Sender<TestAlarmConfig>) -> Self {
         Self {
-            topic,
+            topic: "crontab",
             tx,
             child_handler: None,
         }
@@ -39,10 +43,9 @@ impl<H: Handler> TestAlarmHandler<H> {
         return topic.ends_with(self.topic);
     }
 
-    fn deserialize(&self, data: Bytes) -> anyhow::Result<String> {
-        let payload = std::str::from_utf8(&data)?;
-
-        Ok(payload.to_string())
+    fn deserialize(&self, data: Bytes) -> anyhow::Result<TestAlarmConfig> {
+        let config = serde_json::from_slice::<TestAlarmConfig>(&data)?;
+        Ok(config)
     }
 }
 
@@ -69,33 +72,67 @@ impl<H: Handler> Handler for TestAlarmHandler<H> {
 
 #[allow(unused)]
 pub struct TestAlarm {
-    empty_schedule_secs: u64,
-    client: MqttClient,
+    crontab: Option<String>,
     service: Arc<RwLock<AlarmService>>,
 }
 
 impl TestAlarm {
-    pub fn new(
-        empty_schedule_secs: u64,
-        client: MqttClient,
-        service: Arc<RwLock<AlarmService>>,
-    ) -> Self {
+    pub fn new(service: Arc<RwLock<AlarmService>>) -> Self {
         Self {
-            empty_schedule_secs,
-            client,
+            crontab: None,
             service,
         }
     }
 
-    pub async fn run(&mut self, tx: Sender<Alarm>, mut rx: Receiver<String>) {
+    pub async fn init(&mut self) {
+        let service = self.service.read().await;
+        self.crontab = service.get_crontab()
+    }
+
+    pub async fn run(&mut self, tx: Sender<Alarm>, mut rx: Receiver<TestAlarmConfig>) {
         loop {
             tokio::select! {
                 ct = rx.recv() => {
                     match ct {
                         Some(ct) => {
-                            info!("Received crontab: {ct}");
-                            let mut service = self.service.write().await;
-                            service.set_crontab(ct);
+                            info!("Received test alarm config: {:?}", ct);
+                            if ct.play_now {
+                                let is_ongoing_alarm_exist = {
+                                    let service = self.service.read().await;
+                                    service.is_ongoing_alarm_exist()
+                                };
+
+                                let result = "{\"code\": 1, \"message\": \"当前有未取消的报警\", \"data\": {}}".to_string();
+                                if is_ongoing_alarm_exist {
+                                    {
+                                        let mut service = self.service.write().await;
+                                        service.publish(TOPIC_RESULT_CRONTAB, result).await;
+                                    }
+                                    continue;
+
+                                }
+
+                                let now = match OffsetDateTime::now_local() {
+                                    Ok(local) => local,
+                                    Err(e) => {
+                                        error!("Can't read local time: {}", e);
+                                        OffsetDateTime::now_utc()
+                                    }
+                                };
+                                let mut alarm = Alarm::default();
+                                alarm.test_plan_time = Some(PrimitiveDateTime::new(now.date(), now.time()));
+                                if let Err(e) = tx.send(alarm).await {
+                                    error!("Failed send test alarm to real time queue: {e}");
+                                }
+
+                                continue;
+                            }
+                            let config = ct.clone();
+                            {
+                                let mut service = self.service.write().await;
+                                service.test_alarm_config(config);
+                            }
+                            self.crontab = ct.crontab;
                         }
                         None => {
                             info!("Crontab channle closed, exit...");
@@ -103,13 +140,14 @@ impl TestAlarm {
                         }
                     }
                 }
-                _ = self.send_test_alarm(&tx) => {
+                _ = self.send_test_alarm(&tx), if self.crontab.is_some() => {
                 }
             }
         }
     }
 
     async fn send_test_alarm(&self, tx: &Sender<Alarm>) {
+        info!("Calculate crontab...");
         let next_fire_time = {
             let service = self.service.read().await;
             service.next_fire_time()
@@ -132,11 +170,10 @@ impl TestAlarm {
                 if let Err(e) = tx.send(alarm).await {
                     error!("Failed send test alarm to real time queue: {e}");
                 }
-                // TODO: mqtt 发送测试结果确认消息
             }
             None => {
                 info!("No test alarm schedules ...");
-                sleep(Duration::from_secs(self.empty_schedule_secs)).await;
+                // sleep(Duration::from_secs(self.empty_schedule_secs)).await;
             }
         }
     }

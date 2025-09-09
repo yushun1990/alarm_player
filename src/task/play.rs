@@ -40,6 +40,7 @@ pub struct Play {
     service: Arc<RwLock<AlarmService>>,
     box_tx: Arc<Mutex<Tx>>,
     post_tx: Arc<Mutex<Tx>>,
+    terminated: Arc<Mutex<bool>>,
 }
 
 impl Play {
@@ -70,6 +71,7 @@ impl Play {
             service,
             box_tx: Default::default(),
             post_tx: Default::default(),
+            terminated: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -138,8 +140,17 @@ impl Play {
         self.cancel(PlayCancelType::AlarmArrived).await;
     }
 
-    pub async fn terminate_play(&self) {
+    pub async fn cancel_play(&self) {
         self.cancel(PlayCancelType::Terminated).await;
+    }
+
+    pub async fn terminate_play(&self) {
+        {
+            let mut tm = self.terminated.lock().await;
+            *tm = true;
+        }
+
+        self.cancel_play().await;
     }
 
     pub async fn run(&self, alarm_tx: Sender<Alarm>, mut alarm_rx: Receiver<Alarm>) {
@@ -269,6 +280,14 @@ impl Play {
                     play_alarm(alarm, box_config, posts_config).await;
                 }
             }
+
+            {
+                let terminated = self.terminated.lock().await;
+                if *terminated {
+                    info!("Terminate play task...");
+                    break;
+                }
+            }
         }
     }
 
@@ -281,12 +300,14 @@ impl Play {
         let id = Self::get_record_id();
         let filename = format!("{}.wav", id);
 
+        let mut play_type = None;
         let record = self
             .recorder
             .start(filename)
             .inspect_err(|e| error!("Recorder start failed: {e}"));
         let mut js = tokio::task::JoinSet::new();
         if sbox.enabled {
+            play_type = Some("音箱报警".to_string());
             let audio_data = self.test_media_buffer.clone();
             let sl = speech_loop.clone();
             let duration = self.test_min_duration;
@@ -302,6 +323,10 @@ impl Play {
         }
 
         if !posts.device_ids.is_empty() {
+            play_type = match play_type {
+                Some(_) => Some("音柱音箱".to_string()),
+                None => Some("音箱报警".to_string()),
+            };
             let device_ids = posts.device_ids;
             let content = PlayContent::Url(self.test_media_url.clone());
             let soundpost = self.soundpost.clone();
@@ -354,6 +379,7 @@ impl Play {
             id,
             has_error,
             err_message,
+            play_type,
             result_type,
         }
     }
@@ -373,8 +399,10 @@ impl Play {
             .start(filename)
             .inspect_err(|e| error!("Recorder start failed: {e}"));
 
+        let mut play_type = None;
         let mut js = tokio::task::JoinSet::new();
         if sbox.enabled {
+            play_type = Some("音箱报警".to_string());
             let audio_data = self.alarm_media_buffer.clone();
             let sl = speech_loop.clone();
             let duration = self.alarm_min_duration;
@@ -390,6 +418,10 @@ impl Play {
         }
 
         if !posts.device_ids.is_empty() {
+            play_type = match play_type {
+                Some(_) => Some("音柱音箱".to_string()),
+                None => Some("音柱报警".to_string()),
+            };
             let device_ids = posts.device_ids.clone();
             let speed = match self.play_mode {
                 PlayMode::Tts => Some(posts.speed),
@@ -440,6 +472,7 @@ impl Play {
         PlayResult {
             id,
             has_error,
+            play_type,
             err_message,
             result_type,
         }

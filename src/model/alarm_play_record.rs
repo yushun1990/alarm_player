@@ -10,7 +10,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: uuid::Uuid,
     pub house_code: String,
-    pub house_name: String,
+    pub house_name: Option<String>,
     // `音柱报警/音箱报警`
     pub receiver_name: String,
     // 录音文件
@@ -24,7 +24,7 @@ pub struct Model {
     pub alarm_send_to: String,
     pub source_message: String,
     // 音柱/音箱未启用
-    pub error_message: String,
+    pub error_message: Option<String>,
     pub creation_time: PrimitiveDateTime,
     pub is_deleted: bool,
     // 固定 0
@@ -36,7 +36,7 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-async fn insert(record: Model, db: &DatabaseConnection) -> anyhow::Result<()> {
+pub async fn insert(record: Model, db: &DatabaseConnection) -> anyhow::Result<()> {
     let record: ActiveModel = record.into();
     record.insert(db).await?;
     Ok(())

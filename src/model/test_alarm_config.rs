@@ -2,6 +2,15 @@ use sea_orm::{
     ActiveModelBehavior, ColumnTrait, DatabaseConnection, DeriveEntityModel, DerivePrimaryKey,
     DeriveRelation, EntityTrait, EnumIter, PrimaryKeyTrait, QueryFilter,
 };
+use serde::Deserialize;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestAlarmConfig {
+    pub duration: u64,
+    pub crontab: Option<String>,
+    pub play_now: bool,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "TestAlarmConfig", rename_all = "PascalCase")]
