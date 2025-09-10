@@ -254,9 +254,6 @@ impl Play {
                     let mut service = self.service.write().await;
                     service.play_record(&alarm, result).await;
                 }
-                if let Err(e) = alarm_tx.send(alarm).await {
-                    error!("Failed to send alarm to cycle queue: {e}");
-                }
             };
 
             match alarm_status {
@@ -266,8 +263,10 @@ impl Play {
                 }
                 AlarmStatus::Paused => {
                     info!("Alarm was paused, don't play, continue...");
-                    if let Err(e) = alarm_tx.send(alarm).await {
-                        error!("Failed to send alarm to cycle queue: {e}");
+                    if !alarm.is_test {
+                        if let Err(e) = alarm_tx.send(alarm).await {
+                            error!("Failed to send alarm to cycle queue: {e}");
+                        }
                     }
                     continue;
                 }
@@ -277,7 +276,11 @@ impl Play {
                         continue;
                     }
                     info!("Play alarm: {:?}", alarm);
-                    play_alarm(alarm, box_config, posts_config).await;
+                    play_alarm(alarm.clone(), box_config, posts_config).await;
+
+                    if let Err(e) = alarm_tx.send(alarm).await {
+                        error!("Failed to send alarm to cycle queue: {e}");
+                    }
                 }
             }
 

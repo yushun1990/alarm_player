@@ -408,7 +408,7 @@ impl AlarmService {
 
     pub fn get_alarm_status(&self, alarm: &Alarm) -> AlarmStatus {
         let key = Self::get_alarm_set_key(&alarm);
-        if !self.alarm_set.contains_key(&key) {
+        if !self.alarm_set.contains_key(&key) && !alarm.is_test {
             // 不存在，说明报警已经被取消
             return AlarmStatus::Canceled;
         }

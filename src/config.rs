@@ -8,8 +8,8 @@ use tracing::error;
 pub struct Args {
     #[arg(short, long, default_value = "config.toml")]
     pub config: String,
-    #[arg(short, long)]
-    pub localization: Option<String>,
+    #[arg(short, long, default_value = "./resource/localization")]
+    pub localization: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,9 +100,6 @@ pub struct MqttConfig {
     password: Option<String>,
     keep_alive: Option<u16>,
     clean_session: Option<bool>,
-    topic_alarms: Option<Vec<String>>,
-    topic_test: Option<String>,
-    topic_speeker: Option<String>,
 }
 
 impl MqttConfig {
@@ -146,34 +143,6 @@ impl MqttConfig {
         }
     }
 
-    pub fn topic_alarms(&self) -> Vec<String> {
-        if let Some(topic_alarm) = self.topic_alarms.clone() {
-            topic_alarm
-        } else {
-            [
-                "$share/ap/+/+/alarm".into(),
-                "$share/ap/+/+/repub_alarms".into(),
-            ]
-            .into()
-        }
-    }
-
-    pub fn topic_test(&self) -> String {
-        if let Some(topic_test) = self.topic_test.clone() {
-            topic_test
-        } else {
-            "/ap/config/test".into()
-        }
-    }
-
-    pub fn topic_speeker(&self) -> String {
-        if let Some(topic_speeker) = self.topic_speeker.clone() {
-            topic_speeker
-        } else {
-            "/ap/status/speeker".into()
-        }
-    }
-
     pub fn username(&self) -> String {
         if let Some(username) = self.username.clone() {
             username
@@ -213,8 +182,6 @@ pub struct AlarmConfig {
     init_url: Option<String>,
     // 默认语言
     default_language: Option<String>,
-    // 多语言json文件地址
-    localization_path: Option<String>,
 }
 
 impl Default for AlarmConfig {
@@ -222,7 +189,7 @@ impl Default for AlarmConfig {
         Self {
             asc_interval_secs: Some(5),
             cycle_interval_secs: Some(5),
-            play_interval_secs: Some(5),
+            play_interval_secs: Some(2),
             play_delay_secs: Some(20),
             default_test_play_duration: Some(60),
             test_min_duration: Some(30),
@@ -233,7 +200,6 @@ impl Default for AlarmConfig {
                     .into(),
             ),
             default_language: Some("zh-Hans".into()),
-            localization_path: Some("./localization".to_string()),
         }
     }
 }
@@ -311,14 +277,6 @@ impl AlarmConfig {
         }
     }
 
-    pub fn localization_path(&self) -> String {
-        if let Some(lp) = self.localization_path.clone() {
-            lp
-        } else {
-            Self::default().localization_path.unwrap()
-        }
-    }
-
     pub fn init_url(&self) -> String {
         if let Some(init_url) = self.init_url.clone() {
             init_url
@@ -338,9 +296,9 @@ pub struct QueueConfig {
 impl Default for QueueConfig {
     fn default() -> Self {
         Self {
-            real_time_size: Some(100),
-            player_size: Some(10),
-            cycle_size: Some(10),
+            real_time_size: Some(10),
+            player_size: Some(2),
+            cycle_size: Some(100),
         }
     }
 }
@@ -383,7 +341,7 @@ impl Default for RecorderConfig {
     fn default() -> Self {
         Self {
             record_storage_path: Some("/data/alarm_player/records".to_string()),
-            record_link_path: Some("/data/alarm_player/link".to_string()),
+            record_link_path: Some("/data/alarm_player/records/links".to_string()),
         }
     }
 }

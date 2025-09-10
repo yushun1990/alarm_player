@@ -23,17 +23,9 @@ use crate::{
 };
 
 pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Config) {
-    tracing_subscriber::fmt()
-        .with_env_filter(config.tracing.level())
-        .init();
-
     let (client, eventloop) = MqttClient::new(config.mqtt);
     {
         let mut service = service.write().await;
-        service
-            .init(config.alarm.localization_path())
-            .await
-            .unwrap();
         service.set_mqtt_client(client.clone());
     }
 
