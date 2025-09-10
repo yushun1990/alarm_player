@@ -5,7 +5,7 @@ use crate::model::{
 };
 use crate::mqtt_client::MqttClient;
 use crate::player::PlayCancelType;
-use crate::util::rfc3339_time;
+use crate::util::{iso8601_no_tz, rfc3339_time};
 use chrono::Utc;
 use cron::Schedule;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
@@ -361,7 +361,7 @@ impl AlarmService {
                     );
                     return false;
                 }
-                if !alarm.is_alarm {
+                if !alarm.is_alarm && alarm.timestamp > last_alarm.timestamp {
                     // 消警，删除报警缓存
                     self.alarm_set.remove(&key);
                     return false;
@@ -395,8 +395,15 @@ impl AlarmService {
             self.alarm_set.insert(key, alarm);
         }
 
-        for k in self.unmapped_cancel_set.keys() {
-            self.alarm_set.remove(k);
+        for cancel in self.unmapped_cancel_set.iter() {
+            match self.alarm_set.get(cancel.0) {
+                Some(alarm) => {
+                    if cancel.1.timestamp > alarm.timestamp {
+                        self.alarm_set.remove(cancel.0);
+                    }
+                }
+                None => {}
+            }
         }
 
         Ok(())
@@ -712,7 +719,9 @@ pub struct MqttPlayResp {
 #[serde(rename_all = "camelCase")]
 pub struct MqttPlayRespData {
     pub result: i32,
+    #[serde(with = "iso8601_no_tz")]
     pub plan_time: PrimitiveDateTime,
+    #[serde(with = "iso8601_no_tz")]
     pub test_time: PrimitiveDateTime,
 }
 
