@@ -160,6 +160,14 @@ impl Play {
         mut cycle_rx: Receiver<Alarm>,
     ) {
         loop {
+            {
+                let terminated = self.terminated.lock().await;
+                if *terminated {
+                    info!("Terminate play task...");
+                    break;
+                }
+            }
+
             tokio::select! {
                 alarm = realtime_rx.recv() => {
                     if alarm.is_none() {
@@ -193,7 +201,14 @@ impl Play {
                             let _ = tx.send(alarm).await;
                         }
                     }
+                }
+            }
 
+            {
+                let terminated = self.terminated.lock().await;
+                if *terminated {
+                    info!("Terminate play task...");
+                    break;
                 }
             }
         }
@@ -303,9 +318,10 @@ impl Play {
             AlarmStatus::Playable => {
                 if alarm.is_test {
                     play_test_alarm(box_config.clone(), posts_config.clone()).await;
+                } else {
+                    info!("Play alarm: {:?}", alarm);
+                    play_alarm(alarm.clone(), box_config, posts_config).await;
                 }
-                info!("Play alarm: {:?}", alarm);
-                play_alarm(alarm.clone(), box_config, posts_config).await;
             }
         }
 

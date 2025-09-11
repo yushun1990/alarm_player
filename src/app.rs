@@ -181,8 +181,8 @@ pub async fn run(service: Service, config: crate::config::Config) {
 
     shutdown.notify_waiters();
 
-    info!("Notify player to cancel playing...");
     play.terminate_play().await;
+    info!("Wait for current playing finished...");
     let _ = tokio::join!(
         mqtt_subscribe_handle,
         real_time_handle,
