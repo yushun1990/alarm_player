@@ -11,8 +11,8 @@ record_storage_path = "/tmp"
 record_link_path = "/tmp"
 
 [soundbox]
-test_media_path = "/home/yushun/Project/alarm_player/resource/please-calm-my-mind-125566.wav"
-alarm_media_path = "/home/yushun/Project/alarm_player/resource/smooth-ac-guitar-loop-93bpm-137706.mp3"
+test_media_path = "./resource/please-calm-my-mind-125566.wav"
+alarm_media_path = "./resource/smooth-ac-guitar-loop-93bpm-137706.mp3"
 
 [soundpost]
 api_host = "192.168.77.14:8080"
