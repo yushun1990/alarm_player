@@ -10,6 +10,11 @@ password="BHzpdmYyyAV1*GHm"
 record_storage_path = "/tmp"
 record_link_path = "/tmp"
 
+[queue]
+real_time_size = 10
+player_size = 1
+cycle_size = 100
+
 [soundbox]
 test_media_path = "/home/yushun/Project/alarm_player/resource/please-calm-my-mind-125566.wav"
 alarm_media_path = "/home/yushun/Project/alarm_player/resource/smooth-ac-guitar-loop-93bpm-137706.mp3"
