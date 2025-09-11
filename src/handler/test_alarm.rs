@@ -1,19 +1,15 @@
 use bytes::Bytes;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use time::{OffsetDateTime, PrimitiveDateTime};
 use tokio::{
-    sync::{
-        RwLock,
-        mpsc::{Receiver, Sender},
-    },
+    sync::mpsc::{Receiver, Sender},
     time::sleep,
 };
 use tracing::{error, info};
 
 use crate::{
-    TOPIC_RESULT_CRONTAB,
+    Service, TOPIC_RESULT_CRONTAB,
     model::{Alarm, TestAlarmConfig},
-    service::AlarmService,
 };
 
 use super::Handler;
@@ -73,11 +69,11 @@ impl<H: Handler> Handler for TestAlarmHandler<H> {
 #[allow(unused)]
 pub struct TestAlarm {
     crontab: Option<String>,
-    service: Arc<RwLock<AlarmService>>,
+    service: Service,
 }
 
 impl TestAlarm {
-    pub fn new(service: Arc<RwLock<AlarmService>>) -> Self {
+    pub fn new(service: Service) -> Self {
         Self {
             crontab: None,
             service,
@@ -90,6 +86,7 @@ impl TestAlarm {
     }
 
     pub async fn run(&mut self, tx: Sender<Alarm>, mut rx: Receiver<TestAlarmConfig>) {
+        let mut last_playnow_time: Option<OffsetDateTime> = None;
         loop {
             tokio::select! {
                 ct = rx.recv() => {
@@ -112,6 +109,24 @@ impl TestAlarm {
 
                                 }
 
+                                let duration = {
+                                    let service = self.service.read().await;
+                                    service.get_test_play_duration()
+                                };
+
+                                if let Some(lpt) = last_playnow_time {
+                                    if ((OffsetDateTime::now_utc() - lpt).whole_seconds() as u64) < duration {
+                                        info!("Play now too frequency, last play: {}, duration: {}", lpt, duration);
+                                        let result = "{\"code\": 1, \"message\": \"播放太频繁，请稍候再试\", \"data\": {}}".to_string();
+                                        {
+                                            let mut service = self.service.write().await;
+                                            service.publish(TOPIC_RESULT_CRONTAB, result).await;
+                                        }
+                                        continue;
+                                    }
+                                }
+
+                                last_playnow_time = Some(OffsetDateTime::now_utc());
                                 let now = match OffsetDateTime::now_local() {
                                     Ok(local) => local,
                                     Err(e) => {

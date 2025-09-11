@@ -3,11 +3,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::StatusCode;
 use serde::Deserialize;
-use tokio::{net::TcpStream, sync::RwLock};
+use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
-use crate::{TOPIC_SOUNDPOST_STATUS, service::AlarmService};
+use crate::{Service, TOPIC_SOUNDPOST_STATUS};
 
 #[derive(Clone, Deserialize)]
 pub struct LoginResult {
@@ -24,7 +24,7 @@ pub struct LoginResponse {
 pub struct WsClient {
     pub api_host: String,
     pub token: String,
-    pub service: Arc<RwLock<AlarmService>>,
+    pub service: Service,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -38,7 +38,7 @@ impl WsClient {
         api_host: String,
         username: String,
         password: String,
-        service: Arc<RwLock<AlarmService>>,
+        service: Service,
     ) -> anyhow::Result<Self> {
         let client = reqwest::Client::new();
         let mut request_data = HashMap::new();

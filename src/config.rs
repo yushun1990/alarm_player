@@ -288,43 +288,61 @@ impl AlarmConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct QueueConfig {
-    pub real_time_size: Option<usize>,
-    pub player_size: Option<usize>,
-    pub cycle_size: Option<usize>,
+    pub act_alarm_size: Option<usize>,
+    pub test_alarm_size: Option<usize>,
+    pub cycle_alarm_size: Option<usize>,
+    pub realtime_play_size: Option<usize>,
+    pub cycle_play_size: Option<usize>,
 }
 
 impl Default for QueueConfig {
     fn default() -> Self {
         Self {
-            real_time_size: Some(10),
-            player_size: Some(2),
-            cycle_size: Some(100),
+            act_alarm_size: Some(50),
+            test_alarm_size: Some(50),
+            cycle_alarm_size: Some(100),
+            realtime_play_size: Some(100),
+            cycle_play_size: Some(10),
         }
     }
 }
 
 impl QueueConfig {
-    pub fn real_time_size(&self) -> usize {
-        if let Some(real_time_size) = self.real_time_size {
-            real_time_size
+    pub fn act_alarm_size(&self) -> usize {
+        if let Some(sz) = self.act_alarm_size {
+            sz
         } else {
-            Self::default().real_time_size.unwrap()
+            Self::default().act_alarm_size.unwrap()
         }
     }
 
-    pub fn player_size(&self) -> usize {
-        if let Some(player_size) = self.player_size {
-            player_size
+    pub fn test_alarm_size(&self) -> usize {
+        if let Some(sz) = self.test_alarm_size {
+            sz
         } else {
-            Self::default().player_size.unwrap()
+            Self::default().test_alarm_size.unwrap()
         }
     }
 
-    pub fn cycle_size(&self) -> usize {
-        if let Some(cycle_size) = self.cycle_size {
-            cycle_size
+    pub fn cycle_alarm_size(&self) -> usize {
+        if let Some(sz) = self.cycle_alarm_size {
+            sz
         } else {
-            Self::default().cycle_size.unwrap()
+            Self::default().cycle_alarm_size.unwrap()
+        }
+    }
+    pub fn realtime_play_size(&self) -> usize {
+        if let Some(sz) = self.realtime_play_size {
+            sz
+        } else {
+            Self::default().realtime_play_size.unwrap()
+        }
+    }
+    pub fn cycle_play_size(&self) -> usize {
+        if let Some(sz) = self.cycle_play_size {
+            sz
+        } else {
+            Self::default().cycle_play_size.unwrap()
         }
     }
 }

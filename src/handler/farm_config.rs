@@ -1,13 +1,7 @@
-use std::sync::Arc;
-
 use bytes::Bytes;
 use serde::Deserialize;
-use tokio::sync::RwLock;
 
-use crate::{
-    service::{AlarmService, BoxConfig},
-    task::Play,
-};
+use crate::{Service, service::BoxConfig, task::Play};
 
 use super::Handler;
 
@@ -24,11 +18,11 @@ pub struct FarmConfigHandler<H: Handler> {
     topic: &'static str,
     play: Play,
     child_handler: Option<H>,
-    service: Arc<RwLock<AlarmService>>,
+    service: Service,
 }
 
 impl<H: Handler> FarmConfigHandler<H> {
-    pub fn new(play: Play, service: Arc<RwLock<AlarmService>>) -> Self {
+    pub fn new(play: Play, service: Service) -> Self {
         Self {
             topic: "farm_config",
             play,

@@ -3,20 +3,20 @@ use std::{fs::File, sync::Arc};
 use rodio::{Decoder, Source};
 use time::{OffsetDateTime, PrimitiveDateTime};
 use tokio::sync::{
-    Mutex, RwLock,
+    Mutex,
     mpsc::{self, Receiver, Sender},
 };
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    Recorder,
+    Recorder, Service,
     config::PlayMode,
     model::Alarm,
     player::{
         Buffer, PlayCancelType, PlayContent, PlayResultType, Soundbox, Soundpost, SpeechLoop,
     },
-    service::{AlarmService, AlarmStatus, BoxConfig, PlayResult, PostConfig},
+    service::{AlarmStatus, BoxConfig, PlayResult, PostConfig},
 };
 
 #[derive(Default, Clone)]
@@ -37,7 +37,7 @@ pub struct Play {
     play_mode: PlayMode,
     soundpost: Soundpost,
     recorder: Recorder,
-    service: Arc<RwLock<AlarmService>>,
+    service: Service,
     box_tx: Arc<Mutex<Tx>>,
     post_tx: Arc<Mutex<Tx>>,
     terminated: Arc<Mutex<bool>>,
@@ -55,7 +55,7 @@ impl Play {
         play_mode: PlayMode,
         soundpost: Soundpost,
         recorder: Recorder,
-        service: Arc<RwLock<AlarmService>>,
+        service: Service,
     ) -> Self {
         Self {
             alarm_media_buffer: Self::get_buffer(alarm_media_path),
@@ -153,145 +153,163 @@ impl Play {
         self.cancel_play().await;
     }
 
-    pub async fn run(&self, alarm_tx: Sender<Alarm>, mut alarm_rx: Receiver<Alarm>) {
+    pub async fn run(
+        &self,
+        tx: Sender<Alarm>,
+        mut realtime_rx: Receiver<Alarm>,
+        mut cycle_rx: Receiver<Alarm>,
+    ) {
         loop {
-            let alarm = match alarm_rx.recv().await {
-                Some(alarm) => alarm,
-                None => {
-                    info!("Play queue was closed, exit...");
-                    return;
-                }
-            };
-
-            let alarm_status = {
-                let service = self.service.read().await;
-                service.get_alarm_status(&alarm)
-            };
-
-            let box_config = {
-                let service = self.service.read().await;
-                service.get_soundbox()
-            };
-
-            let posts_config = {
-                let service = self.service.read().await;
-                service.get_soundposts()
-            };
-
-            let test_play_duration = {
-                let service = self.service.read().await;
-                service.get_test_play_duration()
-            };
-
-            let play_interval = {
-                let service = self.service.read().await;
-                service.get_play_interval_secs()
-            };
-
-            let play_test_alarm = async |box_config, posts_config| -> () {
-                // 測試報警，直接播放
-                info!("Play test alarm: {:?}", alarm);
-                let local = match OffsetDateTime::now_local() {
-                    Ok(local) => local,
-                    Err(e) => {
-                        error!("Failed to get local time: {e}");
-                        OffsetDateTime::now_utc()
+            tokio::select! {
+                alarm = realtime_rx.recv() => {
+                    if alarm.is_none() {
+                        info!("Realtime channel closed, exit play run...");
+                        return;
                     }
-                };
-                let mut alarm = alarm.clone();
-                alarm.test_time = Some(PrimitiveDateTime::new(local.date(), local.time()));
-
-                let result = self
-                    .play_test(
-                        box_config,
-                        posts_config,
-                        SpeechLoop {
-                            duration: test_play_duration,
-                            times: 1000,
-                            gap: play_interval,
-                        },
-                    )
-                    .await;
-
-                let mut service = self.service.write().await;
-                service.test_play_record(&alarm, result).await;
-            };
-
-            let play_alarm = async |alarm, box_config, posts_config| -> () {
-                let (content, duration) = {
-                    let service = self.service.read().await;
-                    match self.play_mode {
-                        PlayMode::Music => (
-                            PlayContent::Url(self.alarm_media_url.clone()),
-                            self.alarm_min_duration,
-                        ),
-                        PlayMode::Tts => {
-                            let content = match service.get_alarm_content(&alarm) {
-                                Ok(content) => content,
-                                Err(e) => {
-                                    error!("Can't extract alarm content: {e}, don't play, skip!!!");
-                                    return;
-                                }
-                            };
-                            (PlayContent::Tts(content), self.speech_min_duration)
+                    let alarm = alarm.unwrap();
+                    match self.play(alarm.clone()).await {
+                        AlarmStatus::Canceled => {
+                            continue;
+                        }
+                        AlarmStatus::Paused | AlarmStatus::Playable => {
+                            if alarm.is_test {
+                                continue;
+                            }
+                            let _ = tx.send(alarm).await;
                         }
                     }
-                };
-
-                let result = self
-                    .play_alarm(
-                        box_config,
-                        posts_config,
-                        content,
-                        SpeechLoop {
-                            duration,
-                            times: 1,
-                            gap: 2,
-                        },
-                    )
-                    .await;
-                {
-                    let mut service = self.service.write().await;
-                    service.play_record(&alarm, result).await;
-                }
-            };
-
-            match alarm_status {
-                AlarmStatus::Canceled => {
-                    info!("Alarm canceled, continue...");
-                    continue;
-                }
-                AlarmStatus::Paused => {
-                    info!("Alarm was paused, don't play, continue...");
-                    if !alarm.is_test {
-                        if let Err(e) = alarm_tx.send(alarm).await {
-                            error!("Failed to send alarm to cycle queue: {e}");
+                },
+                alarm = cycle_rx.recv(), if realtime_rx.is_empty() => {
+                    if alarm.is_none() {
+                        info!("Cycle channel closed, exit play run...");
+                        return;
+                    }
+                    let alarm = alarm.unwrap();
+                    match self.play(alarm.clone()).await {
+                        AlarmStatus::Canceled => {
+                            continue;
+                        }
+                        AlarmStatus::Paused | AlarmStatus::Playable => {
+                            let _ = tx.send(alarm).await;
                         }
                     }
-                    continue;
-                }
-                AlarmStatus::Playable => {
-                    if alarm.is_test {
-                        play_test_alarm(box_config.clone(), posts_config.clone()).await;
-                        continue;
-                    }
-                    info!("Play alarm: {:?}", alarm);
-                    play_alarm(alarm.clone(), box_config, posts_config).await;
 
-                    if let Err(e) = alarm_tx.send(alarm).await {
-                        error!("Failed to send alarm to cycle queue: {e}");
-                    }
-                }
-            }
-
-            {
-                let terminated = self.terminated.lock().await;
-                if *terminated {
-                    info!("Terminate play task...");
-                    break;
                 }
             }
         }
+    }
+
+    async fn play(&self, alarm: Alarm) -> AlarmStatus {
+        let alarm_status = {
+            let service = self.service.read().await;
+            service.get_alarm_status(&alarm)
+        };
+
+        let box_config = {
+            let service = self.service.read().await;
+            service.get_soundbox()
+        };
+
+        let posts_config = {
+            let service = self.service.read().await;
+            service.get_soundposts()
+        };
+
+        let test_play_duration = {
+            let service = self.service.read().await;
+            service.get_test_play_duration()
+        };
+
+        let play_interval = {
+            let service = self.service.read().await;
+            service.get_play_interval_secs()
+        };
+
+        let play_test_alarm = async |box_config, posts_config| -> () {
+            // 測試報警，直接播放
+            info!("Play test alarm: {:?}", alarm);
+            let local = match OffsetDateTime::now_local() {
+                Ok(local) => local,
+                Err(e) => {
+                    error!("Failed to get local time: {e}");
+                    OffsetDateTime::now_utc()
+                }
+            };
+            let mut alarm = alarm.clone();
+            alarm.test_time = Some(PrimitiveDateTime::new(local.date(), local.time()));
+
+            let result = self
+                .play_test(
+                    box_config,
+                    posts_config,
+                    SpeechLoop {
+                        duration: test_play_duration,
+                        times: 1000,
+                        gap: play_interval,
+                    },
+                )
+                .await;
+
+            let mut service = self.service.write().await;
+            service.test_play_record(&alarm, result).await;
+        };
+
+        let play_alarm = async |alarm, box_config, posts_config| -> () {
+            let (content, duration) = {
+                let service = self.service.read().await;
+                match self.play_mode {
+                    PlayMode::Music => (
+                        PlayContent::Url(self.alarm_media_url.clone()),
+                        self.alarm_min_duration,
+                    ),
+                    PlayMode::Tts => {
+                        let content = match service.get_alarm_content(&alarm) {
+                            Ok(content) => content,
+                            Err(e) => {
+                                error!("Can't extract alarm content: {e}, don't play, skip!!!");
+                                return;
+                            }
+                        };
+                        (PlayContent::Tts(content), self.speech_min_duration)
+                    }
+                }
+            };
+
+            let result = self
+                .play_alarm(
+                    box_config,
+                    posts_config,
+                    content,
+                    SpeechLoop {
+                        duration,
+                        times: 1,
+                        gap: 2,
+                    },
+                )
+                .await;
+            {
+                let mut service = self.service.write().await;
+                service.play_record(&alarm, result).await;
+            }
+        };
+
+        match alarm_status {
+            AlarmStatus::Canceled => {
+                info!("Alarm canceled, continue...");
+            }
+            AlarmStatus::Paused => {
+                info!("Alarm was paused, don't play, continue...");
+            }
+            AlarmStatus::Playable => {
+                if alarm.is_test {
+                    play_test_alarm(box_config.clone(), posts_config.clone()).await;
+                }
+                info!("Play alarm: {:?}", alarm);
+                play_alarm(alarm.clone(), box_config, posts_config).await;
+            }
+        }
+
+        alarm_status
     }
 
     async fn play_test(

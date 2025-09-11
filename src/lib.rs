@@ -8,10 +8,14 @@ pub mod service;
 pub mod task;
 
 mod recorder;
+use std::sync::Arc;
+
 use mimalloc::MiMalloc;
 pub use recorder::Recorder;
 
 mod util;
+use service::AlarmService;
+use tokio::sync::RwLock;
 pub use util::rfc3339_time;
 
 #[global_allocator]
@@ -33,3 +37,5 @@ pub const TOPIC_SOUND_POST: &str = "ap/device/sound_posts";
 pub const TOPIC_HOUSE_SET: &str = "ap/alarm/houses";
 // [{"houseCode": "d2123sd333", "targetName": "高温报警", "isConfirmed": true}]
 pub const TOPIC_ALARM_CONFIRM: &str = "ap/alarm/confirm";
+
+type Service = Arc<RwLock<AlarmService>>;

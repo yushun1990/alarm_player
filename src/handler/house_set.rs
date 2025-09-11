@@ -1,21 +1,17 @@
-use std::sync::Arc;
-
+use crate::{Service, service::House};
 use bytes::Bytes;
-use tokio::sync::RwLock;
-
-use crate::service::{AlarmService, House};
 
 use super::Handler;
 
 #[derive(Clone)]
 pub struct HouseSetHandler<H: Handler> {
     topic: &'static str,
-    service: Arc<RwLock<AlarmService>>,
+    service: Service,
     child_handler: Option<H>,
 }
 
 impl<H: Handler> HouseSetHandler<H> {
-    pub fn new(service: Arc<RwLock<AlarmService>>) -> Self {
+    pub fn new(service: Service) -> Self {
         Self {
             topic: "houses",
             service,

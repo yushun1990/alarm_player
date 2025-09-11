@@ -1,27 +1,24 @@
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{collections::VecDeque, time::Duration};
 
 use tokio::{
     sync::{
-        Mutex, Notify, RwLock,
+        Mutex,
         mpsc::{Receiver, Sender},
     },
     time::sleep,
 };
 use tracing::{error, info};
 
-use crate::{
-    model::Alarm,
-    service::{AlarmService, AlarmStatus},
-};
+use crate::{Service, model::Alarm, service::AlarmStatus};
 
 pub struct Cycle {
     check_interval: u64,
     alarms: Mutex<VecDeque<Alarm>>,
-    service: Arc<RwLock<AlarmService>>,
+    service: Service,
 }
 
 impl Cycle {
-    pub async fn init(check_interval: u64, service: Arc<RwLock<AlarmService>>) -> Self {
+    pub async fn init(check_interval: u64, service: Service) -> Self {
         let initial_alarms = {
             let service = service.read().await;
             service.get_alarms()
@@ -33,19 +30,10 @@ impl Cycle {
         }
     }
 
-    pub async fn run(
-        &self,
-        alarm_tx: Sender<Alarm>,
-        mut alarm_rx: Receiver<Alarm>,
-        shutdown: Arc<Notify>,
-    ) {
+    pub async fn run(&self, tx: Sender<Alarm>, mut rx: Receiver<Alarm>) {
         loop {
             tokio::select! {
-                _ = shutdown.notified() => {
-                    info!("Shutdown cycle processor...");
-                    return;
-                }
-                alarm = alarm_rx.recv() => {
+                alarm = rx.recv() => {
                     match alarm {
                         Some(alarm) => {
                             self.push(alarm).await;
@@ -57,7 +45,7 @@ impl Cycle {
                         }
                     };
                 },
-                _ = self.play(&alarm_tx), if !self.alarms.lock().await.is_empty() => {}
+                _ = self.play(&tx), if !self.alarms.lock().await.is_empty() => {}
             }
         }
     }

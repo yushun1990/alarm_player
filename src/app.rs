@@ -5,11 +5,12 @@ use tokio::{
         self,
         unix::{SignalKind, signal},
     },
-    sync::{Notify, RwLock, mpsc::channel},
+    sync::{Notify, mpsc::channel},
 };
 use tracing::{error, info};
 
 use crate::{
+    Service,
     handler::{
         ActAlarmHandler, AlarmConfirmHandler, DefaultHandler, FarmConfigHandler, HouseSetHandler,
         SoundpostsHandler, TestAlarm, TestAlarmHandler,
@@ -18,20 +19,21 @@ use crate::{
     mqtt_client::MqttClient,
     player::Soundpost,
     recorder::Recorder,
-    service::AlarmService,
     task::{Cycle, Play, RealTime, WsClient},
 };
 
-pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Config) {
+pub async fn run(service: Service, config: crate::config::Config) {
     let (client, eventloop) = MqttClient::new(config.mqtt);
     {
         let mut service = service.write().await;
         service.set_mqtt_client(client.clone());
     }
 
-    let (real_time_tx, real_time_rx) = channel::<Alarm>(config.queue.real_time_size());
-    let (cycle_tx, cycle_rx) = channel::<Alarm>(config.queue.cycle_size());
-    let (player_tx, player_rx) = channel::<Alarm>(config.queue.player_size());
+    let (act_alarm_tx, act_alarm_rx) = channel::<Alarm>(config.queue.act_alarm_size());
+    let (test_alarm_tx, test_alarm_rx) = channel::<Alarm>(config.queue.test_alarm_size());
+    let (cycle_alarm_tx, cycle_alarm_rx) = channel::<Alarm>(config.queue.cycle_alarm_size());
+    let (realtime_play_tx, realtime_play_rx) = channel::<Alarm>(config.queue.realtime_play_size());
+    let (cycle_play_tx, cycle_play_rx) = channel::<Alarm>(config.queue.cycle_play_size());
     let (ct_tx, ct_rx) = channel::<TestAlarmConfig>(10);
 
     let alarm_media_path = config.soundbox.alarm_media_path();
@@ -68,17 +70,17 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     );
     let play_clone = play.clone();
     let play_handle = tokio::spawn(async move {
-        play_clone.run(cycle_tx, player_rx).await;
+        play_clone
+            .run(cycle_alarm_tx, realtime_play_rx, cycle_play_rx)
+            .await;
     });
 
     let shutdown = Arc::new(Notify::new());
-    let sd = shutdown.clone();
-    let alarm_tx = player_tx.clone();
     let real_time_service = service.clone();
-    let asc_interval_secs = config.alarm.asc_interval_secs();
-    let mut realtime = RealTime::new(asc_interval_secs, real_time_service);
     let real_time_handle = tokio::spawn(async move {
-        realtime.run(player_tx, real_time_rx).await;
+        RealTime::new(real_time_service)
+            .run(realtime_play_tx, act_alarm_rx, test_alarm_rx)
+            .await;
     });
 
     // ============================= MQTT 消息处理规则链 ===================================
@@ -111,13 +113,13 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     // 真实报警消息
     type AAH = ActAlarmHandler<TAH>;
     let play_clone = play.clone();
-    let handler = AAH::new(real_time_tx.clone(), play_clone).handler(handler);
+    let handler = AAH::new(act_alarm_tx, play_clone).handler(handler);
     // =========================================================================
 
     let test_alarm_service = service.clone();
     let mut test_alarm = TestAlarm::new(test_alarm_service);
     let test_alarm_handle = tokio::spawn(async move {
-        test_alarm.run(real_time_tx, ct_rx).await;
+        test_alarm.run(test_alarm_tx, ct_rx).await;
     });
 
     let topics: Vec<String> = vec![
@@ -145,12 +147,12 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
         }
     }
 
-    let cycle_service = service.clone();
+    let service_clone = service.clone();
     let cycle_interval_secs = config.alarm.cycle_interval_secs();
     let cycle_handle = tokio::spawn(async move {
-        Cycle::init(cycle_interval_secs, cycle_service)
+        Cycle::init(cycle_interval_secs, service_clone)
             .await
-            .run(alarm_tx, cycle_rx, sd)
+            .run(cycle_play_tx, cycle_alarm_rx)
             .await;
     });
 
@@ -178,18 +180,17 @@ pub async fn run(service: Arc<RwLock<AlarmService>>, config: crate::config::Conf
     }
 
     shutdown.notify_waiters();
+
+    info!("Notify player to cancel playing...");
+    play.terminate_play().await;
     let _ = tokio::join!(
         mqtt_subscribe_handle,
         real_time_handle,
         cycle_handle,
         test_alarm_handle,
-        ws_handle
+        ws_handle,
+        play_handle
     );
-
-    info!("Notify player to cancel playing...");
-    play.terminate_play().await;
-    info!("Wait for player to end...");
-    let _ = play_handle.await;
 
     info!("==================== Alarm player exited ====================");
 }

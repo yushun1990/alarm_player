@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
+use crate::{Service, service::PostConfig};
 use bytes::Bytes;
 use serde::Deserialize;
-use tokio::sync::RwLock;
-
-use crate::service::{AlarmService, PostConfig};
 
 use super::Handler;
 
@@ -18,12 +14,12 @@ pub struct Soundposts {
 #[derive(Clone)]
 pub struct SoundpostsHandler<H: Handler> {
     topic: &'static str,
-    service: Arc<RwLock<AlarmService>>,
+    service: Service,
     child_handler: Option<H>,
 }
 
 impl<H: Handler> SoundpostsHandler<H> {
-    pub fn new(service: Arc<RwLock<AlarmService>>) -> Self {
+    pub fn new(service: Service) -> Self {
         Self {
             topic: "sound_posts",
             service,

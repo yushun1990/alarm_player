@@ -420,6 +420,13 @@ impl AlarmService {
             return AlarmStatus::Canceled;
         }
 
+        if let Some(catched_alarm) = self.alarm_set.get(&key) {
+            if catched_alarm.timestamp > alarm.timestamp {
+                info!("Catched alarm timestamp bigger than checked alarm timestamp, cancel it.");
+                return AlarmStatus::Canceled;
+            }
+        }
+
         // 空舍
         let paused = match self.house_set.get(&alarm.house_code) {
             Some(house) => house.is_empty_mode && !house.enabled,
